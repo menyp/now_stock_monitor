@@ -124,7 +124,7 @@ def notify_peak(price, is_simulation=False):
         print(f"[ALERT] Email notification process failed: {e}")
         logging.error(f"[ALERT] Email notification process failed: {e}")
 
-def monitor_stock(window_start=None, window_end=None):
+def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
     data = load_data()
     today = get_today()
     current_price = fetch_sn_price()
@@ -208,13 +208,14 @@ def monitor_stock(window_start=None, window_end=None):
     # Always update current price
     data[window_key]['current_price'] = current_price
 
-    # If the peak was simulated, revert to last real peak
-    if data[window_key].get('peak_simulated'):
+    # If the peak was simulated, only clear it on manual refresh
+    if manual_refresh and data[window_key].get('peak_simulated'):
         data[window_key]['peak_price'] = data[window_key].get('last_real_peak_price', data[window_key]['baseline_price'])
         data[window_key]['peak_date'] = data[window_key].get('last_real_peak_date', data[window_key]['baseline_date'])
         data[window_key]['peak_simulated'] = False
         save_data(data)
         print(f"Simulated peak cleared. Restored last real peak for window {window_key}: {data[window_key]['peak_price']} on {data[window_key]['peak_date']}")
+    # If not manual refresh and peak was simulated, keep it as is
 
     # Check for new real peak (must be above both previous peak and baseline)
     last_real = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
@@ -656,7 +657,7 @@ def api_status():
 
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
-    monitor_stock()  # Force a check
+    monitor_stock(manual_refresh=True)  # Force a check with manual refresh flag
     data = load_data()
     
     # Check if there's an active trading window set
@@ -797,18 +798,47 @@ def api_remove_email():
 def api_simulate_peak():
     # Simulate a new peak by incrementing last real peak by 100 and triggering notify_peak
     data = load_data()
-    month = get_current_month()
-    if month not in data:
-        return jsonify({"status": {"month": month}, "message": "No data for this month."})
-    last_real_peak = data[month]['last_real_peak_price'] if data[month]['last_real_peak_price'] is not None else data[month]['baseline_price']
+    
+    # Check if there's an active trading window set
+    if 'active_window' in data:
+        window_key = data['active_window']
+        if window_key not in data:
+            return jsonify({"status": {"message": "No data for current trading window."}, "message": "No data found."})
+    else:
+        # Default to current month if no window is set
+        window_key = get_current_month()
+        if window_key not in data:
+            return jsonify({"status": {"month": window_key}, "message": "No data for this month."})
+    
+    # Get the last real peak (or baseline if no real peak)
+    last_real_peak = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
+    
+    # Simulate a new peak by adding 100 to the last real peak
     simulated_peak = last_real_peak + 100
-    data[month]['current_price'] = simulated_peak
-    data[month]['peak_price'] = simulated_peak
-    data[month]['peak_date'] = get_today()
-    data[month]['peak_simulated'] = True
+    data[window_key]['current_price'] = simulated_peak
+    data[window_key]['peak_price'] = simulated_peak
+    data[window_key]['peak_date'] = get_today()
+    data[window_key]['peak_simulated'] = True
     save_data(data)
+    
+    # Send notification
     notify_peak(simulated_peak, is_simulation=True)
-    return jsonify({"status": {"month": month, **data[month]}, "message": "Simulated peak!"})
+    
+    # Build response based on window type
+    if 'active_window' in data:
+        # Parse window for display
+        start_date, end_date = window_key.split('_to_')
+        return jsonify({
+            "status": {
+                "month": f"{start_date} to {end_date}",
+                "window_start": start_date,
+                "window_end": end_date,
+                **data[window_key]
+            }, 
+            "message": "Simulated peak!"
+        })
+    else:
+        return jsonify({"status": {"month": window_key, **data[window_key]}, "message": "Simulated peak!"})
 
 if __name__ == '__main__':
     # Get port from environment variable for cloud deployment
