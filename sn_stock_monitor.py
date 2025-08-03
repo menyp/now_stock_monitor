@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import subprocess
 import sys
 import threading
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
 DATA_FILE = 'sn_monthly_data.json'
 TICKER = 'NOW'
@@ -33,6 +33,10 @@ def load_data():
         with open(DATA_FILE, 'r') as f:
             return json.load(f)
     return {}
+
+def format_window_key(start_date, end_date):
+    """Create a unique key for a trading window"""
+    return f"{start_date}_to_{end_date}"
 
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
@@ -102,20 +106,52 @@ def notify_peak(price, is_simulation=False):
         print(f"[ALERT] Email notification failed: {e}")
         logging.error(f"[ALERT] Email notification failed: {e}")
 
-def monitor_stock():
+def monitor_stock(window_start=None, window_end=None):
     data = load_data()
-    month = get_current_month()
     today = get_today()
     current_price = fetch_sn_price()
     if current_price is None:
         print("Could not fetch SN price.")
         return
+        
+    # Determine which trading window we're using
+    if 'active_window' in data and not (window_start and window_end):
+        window_key = data['active_window']
+        window_start, window_end = window_key.split('_to_')
+    elif window_start and window_end:
+        window_key = format_window_key(window_start, window_end)
+    else:
+        # Default to current month if no window is specified
+        month = get_current_month()
+        window_key = month
 
-    # Always recalculate baseline on every run/refresh
+    # Calculate baseline based on window start date or default to first day of current month
     ticker = yf.Ticker(TICKER)
-    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-    hist = ticker.history(start=month_start, end=next_month, interval='1d')
+    
+    # Convert window_start to datetime if it exists, otherwise use first day of current month
+    if window_start:
+        try:
+            start_date = datetime.strptime(window_start, '%Y-%m-%d')
+        except ValueError:
+            print(f"Invalid start date format: {window_start}")
+            start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        start_date = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    
+    # Convert window_end to datetime if it exists, otherwise use first day of next month
+    if window_end:
+        try:
+            end_date = datetime.strptime(window_end, '%Y-%m-%d')
+            # Add one day to include the end date in the data
+            end_date = end_date + timedelta(days=1)
+        except ValueError:
+            print(f"Invalid end date format: {window_end}")
+            end_date = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+    else:
+        end_date = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+    
+    # Get historical data for the window
+    hist = ticker.history(start=start_date, end=end_date, interval='1d')
     if not hist.empty:
         first_market_day = hist.index[0]
         minute_hist = ticker.history(start=first_market_day, end=first_market_day + timedelta(days=1), interval='1m')
@@ -131,9 +167,9 @@ def monitor_stock():
         baseline_price = current_price
         baseline_date = today
 
-    if month not in data:
-        # First run this month: set only baseline and current price; leave peak unset
-        data[month] = {
+    if window_key not in data:
+        # First run for this window: set only baseline and current price; leave peak unset
+        data[window_key] = {
             'baseline_date': baseline_date,
             'baseline_price': baseline_price,
             'peak_price': None,
@@ -144,37 +180,37 @@ def monitor_stock():
             'last_real_peak_date': None,
         }
         save_data(data)
-        print(f"Initialized baseline for {month}: ${baseline_price:.2f} on {baseline_date}")
+        print(f"Initialized baseline for window {window_key}: ${baseline_price:.2f} on {baseline_date}")
         return
     else:
         # Always update baseline to the correct value
-        data[month]['baseline_date'] = baseline_date
-        data[month]['baseline_price'] = baseline_price
+        data[window_key]['baseline_date'] = baseline_date
+        data[window_key]['baseline_price'] = baseline_price
 
     # Always update current price
-    data[month]['current_price'] = current_price
+    data[window_key]['current_price'] = current_price
 
     # If the peak was simulated, revert to last real peak
-    if data[month].get('peak_simulated'):
-        data[month]['peak_price'] = data[month].get('last_real_peak_price', data[month]['baseline_price'])
-        data[month]['peak_date'] = data[month].get('last_real_peak_date', data[month]['baseline_date'])
-        data[month]['peak_simulated'] = False
+    if data[window_key].get('peak_simulated'):
+        data[window_key]['peak_price'] = data[window_key].get('last_real_peak_price', data[window_key]['baseline_price'])
+        data[window_key]['peak_date'] = data[window_key].get('last_real_peak_date', data[window_key]['baseline_date'])
+        data[window_key]['peak_simulated'] = False
         save_data(data)
-        print(f"Simulated peak cleared. Restored last real peak for {month}: {data[month]['peak_price']} on {data[month]['peak_date']}")
+        print(f"Simulated peak cleared. Restored last real peak for window {window_key}: {data[window_key]['peak_price']} on {data[window_key]['peak_date']}")
 
     # Check for new real peak (must be above both previous peak and baseline)
-    last_real = data[month]['last_real_peak_price'] if data[month]['last_real_peak_price'] is not None else data[month]['baseline_price']
-    if current_price > max(last_real, data[month]['baseline_price']):
-        data[month]['peak_price'] = current_price
-        data[month]['peak_date'] = today
-        data[month]['last_real_peak_price'] = current_price
-        data[month]['last_real_peak_date'] = today
+    last_real = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
+    if current_price > max(last_real, data[window_key]['baseline_price']):
+        data[window_key]['peak_price'] = current_price
+        data[window_key]['peak_date'] = today
+        data[window_key]['last_real_peak_price'] = current_price
+        data[window_key]['last_real_peak_date'] = today
         save_data(data)
         notify_peak(current_price)
-        print(f"New monthly peak: ${current_price:.2f}")
+        print(f"New peak for window {window_key}: ${current_price:.2f}")
     else:
         save_data(data)
-        print(f"Checked: ${current_price:.2f} (Current peak: {data[month]['peak_price']})")
+        print(f"Checked: ${current_price:.2f} (Current peak: {data[window_key]['peak_price']})")
 
 def start_scheduler():
     print("Starting SN stock monitor...")
@@ -203,11 +239,20 @@ def dashboard():
     .field-card.highlight .field-value { color: #388e3c; font-weight: 700; font-size: 1.22em; }
     .field-card.big { font-size: 1.24em; padding: 20px 18px; }
     .field-card.two-cols .field-label { min-width: 55px; }
-    .btn-group { display: flex; gap: 14px; justify-content: center; margin: 22px 0 14px 0; }
+    .btn-group { display: flex; gap: 14px; justify-content: center; margin: 22px 0 14px 0; flex-wrap: wrap; }
     button { background: #1976d2; color: #fff; border: none; border-radius: 8px; padding: 12px 24px; font-size: 1.08em; font-weight: 500; cursor: pointer; transition: background 0.18s, box-shadow 0.18s; box-shadow: 0 1px 4px #1976d220; }
     button:hover, button:focus { background: #1565c0; outline: none; box-shadow: 0 2px 8px #1976d230; }
     #msg { text-align: center; margin-top: 12px; min-height: 28px; font-weight: 500; font-size: 1.08em; letter-spacing: 0.1px; }
     .spinner { display: inline-block; width: 22px; height: 22px; border: 3px solid #1976d2; border-radius: 50%; border-top: 3px solid #fff; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+    
+    /* Trading window styles */
+    .trading-window-inputs { display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px; border: 1px dashed #ccc; }
+    .date-input-group { display: flex; align-items: center; justify-content: space-between; }
+    .date-input-group label { font-weight: 500; color: #555; flex: 1; text-align: left; }
+    .date-input-group input[type="date"] { flex: 2; padding: 8px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit; }
+    .window-btn { background: #4caf50; margin-top: 8px; }
+    .window-btn:hover, .window-btn:focus { background: #388e3c; }
+    
     @keyframes spin { 100% { transform: rotate(360deg); } }
     @media (max-width: 600px) {
       .container { max-width: 99vw; padding: 10px 2px; }
@@ -221,7 +266,18 @@ def dashboard():
     </style>
     <div class="container">
       <h2>ServiceNow (NOW) Stock Monitor</h2>
-      <h4>Month: <span id="month"></span></h4>
+      <h4>Trading Window: <span id="month"></span></h4>
+      <div class="trading-window-inputs">
+        <div class="date-input-group">
+          <label for="window-start">Window Start Date:</label>
+          <input type="date" id="window-start" name="window-start">
+        </div>
+        <div class="date-input-group">
+          <label for="window-end">Window End Date:</label>
+          <input type="date" id="window-end" name="window-end">
+        </div>
+        <button onclick="setTradingWindow()" class="window-btn">Set Trading Window</button>
+      </div>
       <div class="fields-panel">
         <div class="field-card highlight big">
           <div class="field-label">Current Price</div>
@@ -266,8 +322,62 @@ def dashboard():
         setTimeout(()=>{document.getElementById('msg').innerText='';}, 1800);
     }
     
+    // Function to set the trading window
+    function setTradingWindow() {
+        const startDate = document.getElementById('window-start').value;
+        const endDate = document.getElementById('window-end').value;
+        
+        if (!startDate || !endDate) {
+            showMsg('Please select both start and end dates', 'red');
+            return;
+        }
+        
+        if (new Date(startDate) > new Date(endDate)) {
+            showMsg('Start date must be before end date', 'red');
+            return;
+        }
+        
+        showSpinner('Setting trading window...');
+        
+        fetch('/api/set_trading_window', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                start_date: startDate,
+                end_date: endDate
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            updateTable(data.status);
+            showMsg(data.message || 'Trading window set!', 'green');
+            
+            // Update date inputs with the selected values for visual confirmation
+            document.getElementById('window-start').value = data.status.window_start;
+            document.getElementById('window-end').value = data.status.window_end;
+            
+            setTimeout(() => { document.getElementById('msg').innerText = ''; }, 3000);
+        })
+        .catch(() => {
+            showMsg('Failed to set trading window', 'red');
+        });
+    }
+    
     function updateTable(data) {
+        // Update trading window heading and dates
         document.getElementById('month').innerText = data.month || '-';
+        
+        // If window dates are provided, update the date inputs
+        if (data.window_start) {
+            document.getElementById('window-start').value = data.window_start;
+        }
+        if (data.window_end) {
+            document.getElementById('window-end').value = data.window_end;
+        }
+        
+        // Update price and date fields
         document.getElementById('baseline_date').innerText = data.baseline_date || '-';
         document.getElementById('baseline_price').innerText = data.baseline_price || '-';
         document.getElementById('peak_price').innerText = (data.peak_price === undefined || data.peak_price === null) ? '–' : data.peak_price;
@@ -375,25 +485,114 @@ def dashboard():
 @app.route('/api/status')
 def api_status():
     data = load_data()
-    month = get_current_month()
-    month_data = data.get(month, {})
-    return jsonify({"month": month, **month_data})
+    # Check if there's an active trading window set
+    if 'active_window' in data:
+        window_key = data['active_window']
+        window_data = data.get(window_key, {})
+        # Parse the window_key to get start and end dates
+        start_date, end_date = window_key.split('_to_')
+        return jsonify({
+            "month": f"{start_date} to {end_date}",  # Display format
+            "window_start": start_date,
+            "window_end": end_date,
+            **window_data
+        })
+    else:
+        # Default to current month if no window is set
+        month = get_current_month()
+        month_data = data.get(month, {})
+        return jsonify({"month": month, **month_data})
 
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
     monitor_stock()  # Force a check
     data = load_data()
-    month = get_current_month()
-    month_data = data.get(month, {})
-    return jsonify({"status": {"month": month, **month_data}, "message": "Refreshed!"})
+    
+    # Check if there's an active trading window set
+    if 'active_window' in data:
+        window_key = data['active_window']
+        window_data = data.get(window_key, {})
+        # Parse the window_key to get start and end dates
+        start_date, end_date = window_key.split('_to_')
+        return jsonify({
+            "status": {
+                "month": f"{start_date} to {end_date}",  # Display format
+                "window_start": start_date,
+                "window_end": end_date,
+                **window_data
+            }, 
+            "message": "Refreshed!"
+        })
+    else:
+        # Default to current month if no window is set
+        month = get_current_month()
+        month_data = data.get(month, {})
+        return jsonify({"status": {"month": month, **month_data}, "message": "Refreshed!"})
+
+@app.route('/api/set_trading_window', methods=['POST'])
+def api_set_window():
+    data = load_data()
+    # Get start and end dates from the request
+    start_date = request.json.get('start_date')
+    end_date = request.json.get('end_date')
+    
+    if not start_date or not end_date:
+        return jsonify({'error': 'Missing start_date or end_date'}), 400
+    
+    # Create a unique key for this window
+    window_key = format_window_key(start_date, end_date)
+    
+    # Set this as the active window
+    data['active_window'] = window_key
+    
+    # Initialize window data if it doesn't exist
+    if window_key not in data:
+        data[window_key] = {
+            'baseline_price': None,
+            'baseline_date': None,
+            'peak_price': None,
+            'peak_date': None,
+            'current_price': None,
+            'peak_simulated': False,
+            'last_real_peak_price': None,
+            'last_real_peak_date': None,
+        }
+    
+    save_data(data)
+    
+    # Force a stock check to update the data with the new window
+    monitor_stock()
+    
+    # Fetch the updated data
+    updated_data = load_data()
+    window_data = updated_data.get(window_key, {})
+    
+    return jsonify({
+        'status': {
+            'month': f"{start_date} to {end_date}",
+            'window_start': start_date,
+            'window_end': end_date,
+            **window_data
+        },
+        'message': f'Trading window set from {start_date} to {end_date}!'
+    })
 
 @app.route('/api/clear', methods=['POST'])
 def api_clear():
     data = load_data()
-    month = get_current_month()
-    if month in data:
-        del data[month]
-        save_data(data)
+    # Check if there's an active window
+    if 'active_window' in data:
+        window_key = data['active_window']
+        if window_key in data:
+            del data[window_key]
+        del data['active_window']
+    else:
+        # Default to current month
+        month = get_current_month()
+        if month in data:
+            del data[month]
+    
+    save_data(data)
     return jsonify({'status': {}, 'message': 'Cleared!'})
 
 @app.route('/api/simulate_peak', methods=['POST'])
