@@ -320,10 +320,54 @@ def dashboard():
             showMsg('Failed to simulate.', 'red');
         });
     }
-    function loadStatus() {
-        fetch('/api/status').then(r=>r.json()).then(updateTable);
+    // Store the current peak value to detect changes
+    let previousPeakValue = null;
+    
+    // Check if peak value has changed and notify if it has
+    function checkForPeakChanges(data) {
+        // First update the table with new data
+        updateTable(data);
+        
+        // Check if this is a new peak
+        if (data.peak_price !== null && 
+            data.peak_price !== undefined &&
+            previousPeakValue !== null &&
+            previousPeakValue !== undefined &&
+            data.peak_price > previousPeakValue) {
+            
+            // Play notification for new peak
+            playNotificationSound();
+            showMsg('New peak detected!', 'green');
+            setTimeout(()=>{document.getElementById('msg').innerText='';}, 3000);
+        }
+        
+        // Update our stored peak value
+        previousPeakValue = data.peak_price;
     }
+    
+    // Initial load
+    function loadStatus() {
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                previousPeakValue = data.peak_price;
+                updateTable(data);
+            });
+    }
+    
+    // Set up automatic polling to check for changes
+    function startAutomaticChecking() {
+        // Check every 10 seconds for updates
+        setInterval(() => {
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(checkForPeakChanges);
+        }, 10000); // 10 seconds
+    }
+    
+    // Initialize everything
     loadStatus();
+    startAutomaticChecking();
     </script>
     '''
     return render_template_string(html)
