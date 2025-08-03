@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: sn-stock-monitor
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn sn_stock_monitor:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0

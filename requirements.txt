@@ -1,0 +1,9 @@
+pandas
+yfinance
+matplotlib
+seaborn
+Flask
+schedule
+pync
+requests
+gunicorn
