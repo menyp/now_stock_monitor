@@ -31,8 +31,13 @@ def fetch_sn_price():
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    return {}
+            data = json.load(f)
+            # Initialize email_recipients if not present
+            if 'email_recipients' not in data:
+                data['email_recipients'] = ["menypeled@gmail.com"]  # Default recipient
+            return data
+    # Return default empty data structure with email_recipients
+    return {'email_recipients': ["menypeled@gmail.com"]}
 
 def format_window_key(start_date, end_date):
     """Create a unique key for a trading window"""
@@ -99,12 +104,25 @@ def notify_peak(price, is_simulation=False):
             print(f"[ALERT] Local notification failed: {e}")
             logging.error(f"[ALERT] Local notification failed: {e}")
     
-    # ---- SEND EMAIL ALERT ----
+    # ---- SEND EMAIL ALERTS TO ALL RECIPIENTS ----
     try:
-        send_email_alert(title, message, "menypeled@gmail.com")  # <-- Replace with your destination email
+        # Get all email recipients from the data
+        data = load_data()
+        recipients = data.get('email_recipients', [])
+        
+        if recipients:
+            for email in recipients:
+                try:
+                    send_email_alert(title, message, email)
+                    print(f"[ALERT] Email sent to {email}")
+                except Exception as e:
+                    print(f"[ALERT] Email notification to {email} failed: {e}")
+                    logging.error(f"[ALERT] Email notification to {email} failed: {e}")
+        else:
+            print("[ALERT] No email recipients configured")
     except Exception as e:
-        print(f"[ALERT] Email notification failed: {e}")
-        logging.error(f"[ALERT] Email notification failed: {e}")
+        print(f"[ALERT] Email notification process failed: {e}")
+        logging.error(f"[ALERT] Email notification process failed: {e}")
 
 def monitor_stock(window_start=None, window_end=None):
     data = load_data()
@@ -253,6 +271,19 @@ def dashboard():
     .window-btn { background: #4caf50; margin-top: 8px; }
     .window-btn:hover, .window-btn:focus { background: #388e3c; }
     
+    /* Email management styles */
+    .email-management { margin: 15px 0 25px; padding: 15px; background: #f0f8ff; border-radius: 10px; border: 1px dashed #1976d2; }
+    .email-management h4 { margin: 0 0 15px; color: #1976d2; font-weight: 500; }
+    .email-input-group { display: flex; gap: 10px; margin-bottom: 15px; }
+    .email-input-group input { flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit; }
+    .email-btn { background: #1976d2; padding: 8px 15px; margin: 0; }
+    .email-list { max-height: 150px; overflow-y: auto; border-top: 1px solid #ddd; padding-top: 10px; }
+    .email-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+    .email-address { font-size: 0.95em; color: #444; }
+    .delete-email { background: #f44336; color: white; border: none; border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 0.8em; }
+    .delete-email:hover { background: #d32f2f; }
+    .loading-placeholder { color: #888; font-style: italic; text-align: center; padding: 10px 0; }
+    
     @keyframes spin { 100% { transform: rotate(360deg); } }
     @media (max-width: 600px) {
       .container { max-width: 99vw; padding: 10px 2px; }
@@ -277,6 +308,18 @@ def dashboard():
           <input type="date" id="window-end" name="window-end">
         </div>
         <button onclick="setTradingWindow()" class="window-btn">Set Trading Window</button>
+      </div>
+      
+      <div class="email-management">
+        <h4>Email Notifications</h4>
+        <div class="email-input-group">
+          <input type="email" id="new-email" placeholder="Enter email address...">
+          <button onclick="addEmailRecipient()" class="email-btn">Add</button>
+        </div>
+        <div id="email-list" class="email-list">
+          <!-- Email recipients will be listed here -->
+          <div class="loading-placeholder">Loading recipients...</div>
+        </div>
       </div>
       <div class="fields-panel">
         <div class="field-card highlight big">
@@ -433,6 +476,9 @@ def dashboard():
     // Store the current peak value to detect changes
     let previousPeakValue = null;
     
+    // Store email recipients
+    let emailRecipients = [];
+    
     // Check if peak value has changed and notify if it has
     function checkForPeakChanges(data) {
         // First update the table with new data
@@ -475,8 +521,113 @@ def dashboard():
         }, 10000); // 10 seconds
     }
     
+    // Email management functions
+    function loadEmailRecipients() {
+        fetch('/api/email_recipients')
+            .then(r => r.json())
+            .then(data => {
+                emailRecipients = data.recipients || [];
+                renderEmailList();
+            })
+            .catch(() => {
+                showMsg('Failed to load email recipients', 'red');
+            });
+    }
+    
+    function renderEmailList() {
+        const listEl = document.getElementById('email-list');
+        listEl.innerHTML = '';
+        
+        if (emailRecipients.length === 0) {
+            listEl.innerHTML = '<div class="loading-placeholder">No recipients added yet</div>';
+            return;
+        }
+        
+        emailRecipients.forEach((email, index) => {
+            const itemEl = document.createElement('div');
+            itemEl.className = 'email-item';
+            itemEl.innerHTML = `
+                <span class="email-address">${email}</span>
+                <button class="delete-email" onclick="removeEmailRecipient(${index})">Remove</button>
+            `;
+            listEl.appendChild(itemEl);
+        });
+    }
+    
+    function addEmailRecipient() {
+        const emailInput = document.getElementById('new-email');
+        const email = emailInput.value.trim();
+        
+        if (!email) {
+            showMsg('Please enter an email address', 'red');
+            return;
+        }
+        
+        // Basic email validation
+        if (!email.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+            showMsg('Please enter a valid email address', 'red');
+            return;
+        }
+        
+        // Check if email already exists
+        if (emailRecipients.includes(email)) {
+            showMsg('This email is already in the list', 'red');
+            return;
+        }
+        
+        fetch('/api/add_email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                emailRecipients = data.recipients;
+                renderEmailList();
+                emailInput.value = '';
+                showMsg('Email added successfully!', 'green');
+                setTimeout(() => { document.getElementById('msg').innerText = ''; }, 1800);
+            } else {
+                showMsg(data.message || 'Failed to add email', 'red');
+            }
+        })
+        .catch(() => {
+            showMsg('Failed to add email', 'red');
+        });
+    }
+    
+    function removeEmailRecipient(index) {
+        if (index < 0 || index >= emailRecipients.length) {
+            return;
+        }
+        
+        const emailToRemove = emailRecipients[index];
+        
+        fetch('/api/remove_email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: emailToRemove })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                emailRecipients = data.recipients;
+                renderEmailList();
+                showMsg('Email removed successfully', 'green');
+                setTimeout(() => { document.getElementById('msg').innerText = ''; }, 1800);
+            } else {
+                showMsg(data.message || 'Failed to remove email', 'red');
+            }
+        })
+        .catch(() => {
+            showMsg('Failed to remove email', 'red');
+        });
+    }
+    
     // Initialize everything
     loadStatus();
+    loadEmailRecipients();
     startAutomaticChecking();
     </script>
     '''
@@ -594,6 +745,53 @@ def api_clear():
     
     save_data(data)
     return jsonify({'status': {}, 'message': 'Cleared!'})
+
+@app.route('/api/email_recipients')
+def api_email_recipients():
+    data = load_data()
+    recipients = data.get('email_recipients', [])
+    return jsonify({'recipients': recipients})
+
+@app.route('/api/add_email', methods=['POST'])
+def api_add_email():
+    email = request.json.get('email', '').strip()
+    
+    # Basic validation
+    if not email or '@' not in email:
+        return jsonify({'success': False, 'message': 'Invalid email address'})
+    
+    data = load_data()
+    recipients = data.get('email_recipients', [])
+    
+    # Check if email already exists
+    if email in recipients:
+        return jsonify({'success': False, 'message': 'Email already exists'})
+    
+    # Add the new email
+    recipients.append(email)
+    data['email_recipients'] = recipients
+    save_data(data)
+    
+    return jsonify({'success': True, 'recipients': recipients, 'message': 'Email added successfully'})
+
+@app.route('/api/remove_email', methods=['POST'])
+def api_remove_email():
+    email = request.json.get('email', '').strip()
+    
+    if not email:
+        return jsonify({'success': False, 'message': 'No email provided'})
+    
+    data = load_data()
+    recipients = data.get('email_recipients', [])
+    
+    # Remove the email if it exists
+    if email in recipients:
+        recipients.remove(email)
+        data['email_recipients'] = recipients
+        save_data(data)
+        return jsonify({'success': True, 'recipients': recipients, 'message': 'Email removed successfully'})
+    else:
+        return jsonify({'success': False, 'message': 'Email not found in the list'})
 
 @app.route('/api/simulate_peak', methods=['POST'])
 def api_simulate_peak():
