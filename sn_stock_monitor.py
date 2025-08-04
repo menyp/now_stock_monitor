@@ -81,7 +81,7 @@ def get_simulation_note():
     return "\n\nNote: This is a simulation, not a real alert."
 
 def notify_peak(price, is_simulation=False):
-    message = f"SN stock hit a new monthly peak: ${price:.2f}"
+    message = f"SN stock hit a new monthly peak: ${price:.2f}\n\nFor more info visit the SN stock monitor: https://now-stock-monitor.onrender.com/"
     title = "ServiceNow Stock Alert"
     if is_simulation:
         message += get_simulation_note()
