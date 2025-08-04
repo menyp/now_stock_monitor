@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ServiceNow Stock Monitor</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 2em; background: #f8f9fa; }
+        .container { max-width: 400px; margin: auto; background: #fff; padding: 2em; border-radius: 10px; box-shadow: 0 2px 10px #0001; }
+        h1 { font-size: 1.5em; margin-bottom: 1em; }
+        .stat { margin-bottom: 1em; }
+        .label { color: #555; }
+        .value { font-weight: bold; font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="alert-banner" style="display:none; background:#4caf50; color:#fff; padding:1em; border-radius:6px; margin-bottom:1em; text-align:center; font-weight:bold;">Peak alert triggered!</div>
+        <h1>ServiceNow Stock Monitor</h1>
+        <button id="refresh-btn" style="margin-bottom: 1em;">Refresh Now</button>
+        <button id="simulate-btn" style="margin-bottom: 1em; margin-left: 1em;">Simulate Peak Alert</button>
+
+        <div class="stat">
+            <span class="label">Current Price:</span>
+            <span class="value" id="current-price">Loading...</span>
+        </div>
+        <div class="stat">
+            <span class="label">Baseline Price (First Day):</span>
+            <span class="value" id="baseline-price">Loading...</span>
+        </div>
+        <div class="stat">
+            <span class="label">Peak Price:</span>
+            <span class="value" id="peak-price">Loading...</span>
+        </div>
+        <div class="stat">
+            <span class="label">Peak Date:</span>
+            <span class="value" id="peak-date">Loading...</span>
+        </div>
+        <hr style="margin:2em 0;">
+        <h2>Peak Alert Log</h2>
+        <table id="peak-log" style="width:100%; border-collapse:collapse;">
+            <thead>
+                <tr style="background:#eee;">
+                    <th style="padding:8px; border:1px solid #ccc;">Price</th>
+                    <th style="padding:8px; border:1px solid #ccc;">Date</th>
+                    <th style="padding:8px; border:1px solid #ccc;">Time</th>
+                </tr>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
+    </div>
+    <script>
+        function fetchStatus() {
+            fetch('/api/status').then(r => r.json()).then(data => {
+                updateUI(data);
+            });
+        }
+
+        function updateUI(data) {
+            if (data.error) {
+                document.getElementById('current-price').textContent = 'N/A';
+                document.getElementById('baseline-price').textContent = 'N/A';
+                document.getElementById('peak-price').textContent = 'N/A';
+                document.getElementById('peak-date').textContent = 'N/A';
+            } else {
+                document.getElementById('current-price').textContent = data.current_price !== null ? `$${data.current_price}` : 'N/A';
+                document.getElementById('baseline-price').textContent = data.baseline_price !== null ? `$${data.baseline_price}` : 'N/A';
+                document.getElementById('peak-price').textContent = data.peak_price !== null ? `$${data.peak_price}` : 'N/A';
+                document.getElementById('peak-date').textContent = data.peak_date || 'N/A';
+            }
+        }
+
+        document.getElementById('refresh-btn').onclick = function() {
+            document.getElementById('refresh-btn').disabled = true;
+            document.getElementById('refresh-btn').textContent = 'Refreshing...';
+            fetch('/api/refresh', {method: 'POST'}).then(r => r.json()).then(data => {
+                updateUI(data);
+                document.getElementById('refresh-btn').disabled = false;
+                document.getElementById('refresh-btn').textContent = 'Refresh Now';
+                // Remove all simulated rows from the peak log table (loop backwards!)
+                var logTable = document.getElementById('peak-log').getElementsByTagName('tbody')[0];
+                for (var i = logTable.rows.length - 1; i >= 0; i--) {
+                    if (logTable.rows[i].getAttribute('data-simulated') === 'true') {
+                        logTable.deleteRow(i);
+                    }
+                }
+            }).catch(() => {
+                document.getElementById('refresh-btn').disabled = false;
+                document.getElementById('refresh-btn').textContent = 'Refresh Now';
+            });
+        };
+
+        document.getElementById('simulate-btn').onclick = function() {
+            document.getElementById('simulate-btn').disabled = true;
+            document.getElementById('simulate-btn').textContent = 'Simulating...';
+            fetch('/api/simulate_peak', {method: 'POST'}).then(r => r.json()).then(data => {
+                updateUI(data);
+                document.getElementById('simulate-btn').disabled = false;
+                document.getElementById('simulate-btn').textContent = 'Simulate Peak Alert';
+                // Show in-UI notification
+                var banner = document.getElementById('alert-banner');
+                console.log("Peak alert banner shown");
+                banner.style.display = 'block';
+                setTimeout(function() {
+                    banner.style.display = 'none';
+                }, 3000);
+                // Add row to peak log table
+                var logTable = document.getElementById('peak-log').getElementsByTagName('tbody')[0];
+                var now = new Date();
+                var price = data.peak_price !== null ? `$${data.peak_price}` : 'N/A';
+                var date = now.toLocaleDateString();
+                var time = now.toLocaleTimeString();
+                var row = logTable.insertRow();
+                row.setAttribute('data-simulated', 'true');
+                row.insertCell(0).textContent = logTable.rows.length; // Row number (starts at 1)
+                row.insertCell(1).textContent = price;
+                row.insertCell(2).textContent = date;
+                row.insertCell(3).textContent = time;
+
+            }).catch(() => {
+                document.getElementById('simulate-btn').disabled = false;
+                document.getElementById('simulate-btn').textContent = 'Simulate Peak Alert';
+            });
+        };
+
+        fetchStatus();
+        setInterval(fetchStatus, 60000); // Refresh every minute
+    </script>
+</body>
+</html>

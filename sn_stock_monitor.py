@@ -8,9 +8,53 @@ import subprocess
 import sys
 import threading
 from flask import Flask, jsonify, render_template_string, request
+import firebase_admin
+from firebase_admin import credentials, db
+import tempfile
 
-DATA_FILE = 'sn_monthly_data.json'
+DATA_FILE = 'sn_monthly_data.json'  # Kept for backwards compatibility
 TICKER = 'NOW'
+
+# Initialize Firebase (only if not already initialized)
+if not firebase_admin._apps:
+    # Check if we're running on Render (production)
+    if os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true':
+        # In production, use environment variables
+        # You'll need to set these in your Render dashboard
+        try:
+            # Get the service account JSON from environment variable and save to temp file
+            if 'FIREBASE_SERVICE_ACCOUNT_JSON' in os.environ:
+                service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+                # Create a temporary file to store the service account JSON
+                fd, path = tempfile.mkstemp()
+                try:
+                    with os.fdopen(fd, 'w') as tmp:
+                        tmp.write(service_account_json)
+                    # Initialize Firebase with the temporary file
+                    cred = credentials.Certificate(path)
+                    firebase_admin.initialize_app(cred, {
+                        'databaseURL': os.environ.get('FIREBASE_DATABASE_URL')
+                    })
+                finally:
+                    # Clean up the temporary file
+                    os.remove(path)
+            else:
+                print("WARNING: Firebase service account JSON not found in environment variables")
+        except Exception as e:
+            print(f"Error initializing Firebase in production: {e}")
+    else:
+        # In development, use a local service account file if it exists
+        try:
+            service_account_path = 'serviceAccountKey.json'
+            if os.path.exists(service_account_path):
+                cred = credentials.Certificate(service_account_path)
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': 'https://sn-stock-monitor-default-rtdb.firebaseio.com'
+                })
+            else:
+                print(f"WARNING: Firebase service account file not found at {service_account_path}")
+        except Exception as e:
+            print(f"Error initializing Firebase in development: {e}")
 
 
 def get_current_month():
@@ -29,13 +73,33 @@ def fetch_sn_price():
     return float(data['Close'][-1])
 
 def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            data = json.load(f)
-            # Initialize email_recipients if not present
-            if 'email_recipients' not in data:
-                data['email_recipients'] = ["menypeled@gmail.com"]  # Default recipient
-            return data
+    try:
+        # First try to get data from Firebase
+        if firebase_admin._apps:
+            # Get a reference to the root of the database
+            ref = db.reference('/')
+            data = ref.get()
+            if data is not None:
+                # Initialize email_recipients if not present
+                if 'email_recipients' not in data:
+                    data['email_recipients'] = ["menypeled@gmail.com"]  # Default recipient
+                return data
+            
+    except Exception as e:
+        print(f"Error loading data from Firebase: {e}")
+    
+    # Fall back to local file if Firebase fails or is not initialized
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r') as f:
+                data = json.load(f)
+                # Initialize email_recipients if not present
+                if 'email_recipients' not in data:
+                    data['email_recipients'] = ["menypeled@gmail.com"]  # Default recipient
+                return data
+    except Exception as e:
+        print(f"Error loading data from local file: {e}")
+        
     # Return default empty data structure with email_recipients
     return {'email_recipients': ["menypeled@gmail.com"]}
 
@@ -44,8 +108,21 @@ def format_window_key(start_date, end_date):
     return f"{start_date}_to_{end_date}"
 
 def save_data(data):
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f)
+    try:
+        # First try to save to Firebase
+        if firebase_admin._apps:
+            # Get a reference to the root of the database
+            ref = db.reference('/')
+            ref.set(data)
+    except Exception as e:
+        print(f"Error saving data to Firebase: {e}")
+    
+    # Also save to local file as backup or if Firebase fails
+    try:
+        with open(DATA_FILE, 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        print(f"Error saving data to local file: {e}")
 
 import logging
 logging.basicConfig(filename='sn_alerts.log', level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')

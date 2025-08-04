@@ -7,3 +7,4 @@ schedule
 pync
 requests
 gunicorn
+firebase-admin

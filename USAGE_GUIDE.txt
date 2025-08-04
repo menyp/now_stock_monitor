@@ -1,0 +1,151 @@
+# ServiceNow Stock Monitor App — Usage Guide
+
+## 1. How to Check if the Monitor Script is Running
+
+- **Via Terminal:**
+  - Run:
+    ```bash
+    launchctl list | grep snstockmonitor
+    ```
+    If you see `com.meny.snstockmonitor` in the output, your monitor is running.
+
+- **Check Log Files:**
+  - Run:
+    ```bash
+    tail -20 /Users/meny.peled/CascadeProjects/now_stock_window_analysis/monitor_stdout.log
+    tail -20 /Users/meny.peled/CascadeProjects/now_stock_window_analysis/monitor_stderr.log
+    ```
+  - If you see recent timestamps or `[ALERT]` messages, your script is working.
+
+- **Via Alerts:**
+  - If you get email alerts, sounds, or notifications, your script is running and monitoring.
+
+---
+
+## 2. How to Start the Monitor Script Manually (if needed)
+
+1. Open Terminal.
+2. Navigate to your project directory:
+   ```bash
+   cd /Users/meny.peled/CascadeProjects/now_stock_window_analysis
+   ```
+3. Activate your virtual environment:
+   ```bash
+   source .venv/bin/activate
+   ```
+4. Start the script:
+   ```bash
+   nohup python3 sn_stock_monitor.py &
+   ```
+
+---
+
+## 3. How to Set Up Auto-Start After Reboot (Launch Agent)
+
+- See the section above for creating and loading the Launch Agent plist file.
+- Once set up, your monitor will start automatically after reboot or login.
+
+---
+
+## 4. How to Run the Web App (UI)
+
+1. Open Terminal.
+2. Navigate to your project directory:
+   ```bash
+   cd /Users/meny.peled/CascadeProjects/now_stock_window_analysis
+   ```
+3. Activate your virtual environment:
+   ```bash
+   source .venv/bin/activate
+   ```
+4. Start the Flask app:
+   ```bash
+   python3 app.py
+   ```
+5. Open your browser and go to:
+   [http://127.0.0.1:5000/](http://127.0.0.1:5000/)
+
+---
+
+## 5. How to Check and View Logs
+
+- **Monitor Script Output:**
+  - `monitor_stdout.log` and `monitor_stderr.log` in your project directory.
+- **Alert Logs:**
+  - `sn_alerts.log` in your project directory contains all alert and error messages.
+- **Web App Logs:**
+  - Output will appear in your terminal where you run `python3 app.py`.
+
+---
+
+## 6. How to Stop and Start the Monitor Script (Manually)
+
+### To Stop (Kill) the Script
+
+- **If running with nohup/background:**
+  1. Find the process ID (PID):
+     ```bash
+     ps aux | grep sn_stock_monitor.py
+     ```
+     - Look for a line with your username and `python3 sn_stock_monitor.py`. The number after your username is the PID.
+  2. Kill the process:
+     ```bash
+     kill <PID>
+     ```
+     Or, to kill all running instances:
+     ```bash
+     pkill -f sn_stock_monitor.py
+     ```
+
+- **If running as a Launch Agent:**
+  ```bash
+  launchctl unload ~/Library/LaunchAgents/com.meny.snstockmonitor.plist
+  ```
+
+### To Start the Script Manually
+
+1. Open Terminal.
+2. Navigate to your project directory:
+   ```bash
+   cd /Users/meny.peled/CascadeProjects/now_stock_window_analysis
+   ```
+3. Activate your virtual environment:
+   ```bash
+   source .venv/bin/activate
+   ```
+4. Start the script in the background:
+   ```bash
+   nohup python3 sn_stock_monitor.py &
+   ```
+
+---
+
+## 7. How to Edit the Launch Agent
+
+- Edit the file:
+  ```bash
+  nano ~/Library/LaunchAgents/com.meny.snstockmonitor.plist
+  ```
+- Save: `Ctrl+O`, then `Enter`
+- Exit: `Ctrl+X`
+- Reload:
+  ```bash
+  launchctl unload ~/Library/LaunchAgents/com.meny.snstockmonitor.plist
+  launchctl load ~/Library/LaunchAgents/com.meny.snstockmonitor.plist
+  ```
+
+---
+
+## 8. Troubleshooting
+
+- **Not receiving alerts?**
+  - Check `sn_alerts.log` for errors.
+  - Make sure your Mac is on, not asleep, and you are logged in.
+  - Check your Launch Agent is loaded and running.
+- **After reboot:**
+  - Your monitor should start automatically if the Launch Agent is set up.
+  - If not, reload it manually (see above).
+
+---
+
+If you need to add more info to this guide, just ask!

@@ -1,0 +1,107 @@
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #f6f8fa;
+}
+
+.app-container {
+  max-width: 800px;
+  margin: 40px auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+  padding: 32px 40px 40px 40px;
+}
+
+h1 {
+  text-align: center;
+  color: #2c3e50;
+  margin-bottom: 32px;
+}
+
+.year-input-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.year-input-form label {
+  font-size: 1.1rem;
+  color: #34495e;
+}
+
+.year-input-form input {
+  width: 100px;
+  padding: 8px;
+  font-size: 1.1rem;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+}
+
+.year-input-form button {
+  padding: 8px 24px;
+  background: #4f8cff;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.year-input-form button:hover {
+  background: #346fd1;
+}
+
+.chart-display-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+}
+
+.chart-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.chart-nav button {
+  padding: 6px 18px;
+  background: #e1eaff;
+  border: none;
+  border-radius: 6px;
+  color: #4f8cff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.chart-nav button:hover {
+  background: #c6dafc;
+}
+
+.chart-area {
+  background: #f3f6fa;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+}
+
+.back-btn {
+  margin-top: 10px;
+  padding: 7px 22px;
+  background: #f7c59f;
+  color: #9c5a09;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.back-btn:hover {
+  background: #f5b97a;
+}

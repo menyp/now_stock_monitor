@@ -1,0 +1,7 @@
+[build]
+  command = ""
+  publish = "."
+
+[dev]
+  command = "python app.py"
+  port = 5000
