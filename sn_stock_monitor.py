@@ -45,7 +45,7 @@ if not firebase_admin._apps:
     else:
         # In development, use a local service account file if it exists
         try:
-            service_account_path = 'serviceAccountKey.json'
+            service_account_path = 'sn-stock-monitor-firebase-adminsdk-fbsvc-5f171ce112.json'
             if os.path.exists(service_account_path):
                 cred = credentials.Certificate(service_account_path)
                 firebase_admin.initialize_app(cred, {
