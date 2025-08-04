@@ -499,11 +499,23 @@ def dashboard():
         document.getElementById('current_price').innerText = data.current_price || '-';
     }
     function clearAll() {
+        // Save current form values
+        const startDate = document.getElementById('window-start').value;
+        const endDate = document.getElementById('window-end').value;
+        
         showSpinner('Clearing...');
         fetch('/api/clear', {method:'POST'})
         .then(r=>r.json()).then(data=>{
-            updateTable({});
-            showMsg('All values cleared!', 'red');
+            clearTable(); // Only clear the display table, not form inputs
+            
+            // Restore the date input values
+            if (startDate) document.getElementById('window-start').value = startDate;
+            if (endDate) document.getElementById('window-end').value = endDate;
+            
+            // Don't clear email recipients, just reload them
+            loadEmailRecipients();
+            
+            showMsg('All price values cleared!', 'green');
         });
     }
     function clearTable() {
@@ -521,11 +533,26 @@ def dashboard():
         document.getElementById('msg').innerHTML = '<span style="color:' + (color||'green') + '">' + msg + '</span>';
     }
     function refreshStatus() {
-        clearTable();
+        // Save current values before refreshing
+        const startDate = document.getElementById('window-start').value;
+        const endDate = document.getElementById('window-end').value;
+        
         showSpinner('Refreshing...');
         fetch('/api/refresh', {method:'POST'})
         .then(r=>r.json()).then(data=>{
             updateTable(data.status);
+            
+            // Restore date values if they're not provided in the response
+            if (!data.status.window_start && startDate) {
+                document.getElementById('window-start').value = startDate;
+            }
+            if (!data.status.window_end && endDate) {
+                document.getElementById('window-end').value = endDate;
+            }
+            
+            // Reload email recipients to ensure they're up to date
+            loadEmailRecipients();
+            
             showMsg(data.message || 'Refreshed!', 'green');
             setTimeout(()=>{document.getElementById('msg').innerText='';}, 1800);
         }).catch(()=>{
@@ -533,10 +560,26 @@ def dashboard():
         });
     }
     function simulatePeak() {
+        // Save current values before simulating
+        const startDate = document.getElementById('window-start').value;
+        const endDate = document.getElementById('window-end').value;
+        
         showSpinner('Simulating...');
         fetch('/api/simulate_peak', {method:'POST'})
         .then(r=>r.json()).then(data=>{
             updateTable(data.status);
+            
+            // Restore date values if they're not provided in the response
+            if (!data.status.window_start && startDate) {
+                document.getElementById('window-start').value = startDate;
+            }
+            if (!data.status.window_end && endDate) {
+                document.getElementById('window-end').value = endDate;
+            }
+            
+            // Reload email recipients to ensure they're up to date
+            loadEmailRecipients();
+            
             showMsg(data.message || 'Simulated peak!', 'green');
             playNotificationSound(); // Play sound notification when a peak is simulated
             setTimeout(()=>{document.getElementById('msg').innerText='';}, 1800);
@@ -912,7 +955,7 @@ def api_simulate_peak():
 
 if __name__ == '__main__':
     # Get port from environment variable for cloud deployment
-    port = int(os.environ.get('PORT', 5002))
+    port = int(os.environ.get('PORT', 5003))
     
     # Only send email if not in production (to avoid spamming)
     if os.environ.get('ENVIRONMENT') != 'production':
