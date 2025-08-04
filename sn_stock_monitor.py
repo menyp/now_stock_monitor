@@ -69,8 +69,8 @@ def fetch_sn_price():
     data = ticker.history(period='1d', interval='1m')
     if data.empty:
         return None
-    # Get the latest available close price
-    return float(data['Close'][-1])
+    # Get the latest available close price and round to 2 decimal places
+    return round(float(data['Close'][-1]), 2)
 
 def load_data():
     try:
@@ -252,24 +252,24 @@ def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
         minute_hist = ticker.history(start=first_market_day, end=first_market_day + timedelta(days=1), interval='1m')
         if not minute_hist.empty:
             first_minute_row = minute_hist.iloc[0]
-            baseline_price = float(first_minute_row['Open'])
+            baseline_price = round(float(first_minute_row['Open']), 2)
             baseline_date = first_minute_row.name.strftime('%Y-%m-%d %H:%M')
         else:
             first_open_row = hist.iloc[0]
-            baseline_price = float(first_open_row['Open'])
+            baseline_price = round(float(first_open_row['Open']), 2)
             baseline_date = first_open_row.name.strftime('%Y-%m-%d')
     else:
-        baseline_price = current_price
+        baseline_price = round(current_price, 2)
         baseline_date = today
 
     if window_key not in data:
         # First run for this window: set only baseline and current price; leave peak unset
         data[window_key] = {
             'baseline_date': baseline_date,
-            'baseline_price': baseline_price,
+            'baseline_price': round(baseline_price, 2),
             'peak_price': None,
             'peak_date': None,
-            'current_price': current_price,
+            'current_price': round(current_price, 2),
             'peak_simulated': False,
             'last_real_peak_price': None,
             'last_real_peak_date': None,
@@ -280,10 +280,10 @@ def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
     else:
         # Always update baseline to the correct value
         data[window_key]['baseline_date'] = baseline_date
-        data[window_key]['baseline_price'] = baseline_price
+        data[window_key]['baseline_price'] = round(baseline_price, 2)
 
     # Always update current price
-    data[window_key]['current_price'] = current_price
+    data[window_key]['current_price'] = round(current_price, 2)
 
     # If the peak was simulated, only clear it on manual refresh
     if manual_refresh and data[window_key].get('peak_simulated'):
@@ -297,9 +297,9 @@ def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
     # Check for new real peak (must be above both previous peak and baseline)
     last_real = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
     if current_price > max(last_real, data[window_key]['baseline_price']):
-        data[window_key]['peak_price'] = current_price
+        data[window_key]['peak_price'] = round(current_price, 2)
         data[window_key]['peak_date'] = today
-        data[window_key]['last_real_peak_price'] = current_price
+        data[window_key]['last_real_peak_price'] = round(current_price, 2)
         data[window_key]['last_real_peak_date'] = today
         save_data(data)
         notify_peak(current_price)
@@ -891,7 +891,7 @@ def api_simulate_peak():
     last_real_peak = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
     
     # Simulate a new peak by adding 100 to the last real peak
-    simulated_peak = last_real_peak + 100
+    simulated_peak = round(last_real_peak + 100, 2)
     data[window_key]['current_price'] = simulated_peak
     data[window_key]['peak_price'] = simulated_peak
     data[window_key]['peak_date'] = get_today()
