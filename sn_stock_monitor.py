@@ -24,24 +24,29 @@ if not firebase_admin._apps:
         try:
             # Get the service account JSON from environment variable and save to temp file
             if 'FIREBASE_SERVICE_ACCOUNT_JSON' in os.environ:
+                print("INFO: Found Firebase service account JSON in environment variables")
                 service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
                 # Create a temporary file to store the service account JSON
                 fd, path = tempfile.mkstemp()
                 try:
                     with os.fdopen(fd, 'w') as tmp:
                         tmp.write(service_account_json)
+                    print(f"INFO: Temporary service account file created: {path}")
                     # Initialize Firebase with the temporary file
                     cred = credentials.Certificate(path)
                     firebase_admin.initialize_app(cred, {
                         'databaseURL': os.environ.get('FIREBASE_DATABASE_URL')
                     })
+                    print(f"INFO: Firebase initialized in production with database URL: {os.environ.get('FIREBASE_DATABASE_URL')}")
                 finally:
                     # Clean up the temporary file
                     os.remove(path)
             else:
-                print("WARNING: Firebase service account JSON not found in environment variables")
+                print("CRITICAL: Firebase service account JSON not found in environment variables")
         except Exception as e:
-            print(f"Error initializing Firebase in production: {e}")
+            print(f"CRITICAL: Error initializing Firebase in production: {e}")
+            import traceback
+            print(traceback.format_exc())
     else:
         # In development, use a local service account file if it exists
         try:
@@ -49,7 +54,7 @@ if not firebase_admin._apps:
             if os.path.exists(service_account_path):
                 cred = credentials.Certificate(service_account_path)
                 firebase_admin.initialize_app(cred, {
-                    'databaseURL': 'https://sn-stock-monitor-default-rtdb.firebaseio.com'
+                    'databaseURL': 'https://sn-stock-monitor-default-rtdb.europe-west1.firebasedatabase.app/'
                 })
             else:
                 print(f"WARNING: Firebase service account file not found at {service_account_path}")
@@ -65,24 +70,43 @@ def get_today():
     return datetime.now().strftime('%Y-%m-%d')
 
 def fetch_sn_price():
-    ticker = yf.Ticker(TICKER)
-    data = ticker.history(period='1d', interval='1m')
-    if data.empty:
+    try:
+        ticker = yf.Ticker(TICKER)
+        # Try to get recent data
+        data = ticker.history(period='1d', interval='1m')
+        
+        # If no data in 1m interval, try 1d interval
+        if data.empty:
+            print("No minute data available, trying daily data...")
+            data = ticker.history(period='1d')
+            
+        if data.empty:
+            print("WARNING: Could not fetch stock data")
+            return None
+            
+        # Get the latest available close price and round to 2 decimal places
+        return round(float(data['Close'][-1]), 2)
+    except Exception as e:
+        print(f"ERROR in fetch_sn_price: {e}")
+        import traceback
+        print(traceback.format_exc())
         return None
-    # Get the latest available close price and round to 2 decimal places
-    return round(float(data['Close'][-1]), 2)
 
 def load_data():
+    print(f"INFO: Loading data, Firebase initialized: {bool(firebase_admin._apps)}")
     try:
         # First try to get data from Firebase
         if firebase_admin._apps:
+            print("INFO: Attempting to load data from Firebase")
             # Get a reference to the root of the database
             ref = db.reference('/')
             data = ref.get()
+            print(f"INFO: Firebase data loaded: {data is not None}")
             if data is not None:
                 # Initialize email_recipients if not present
                 if 'email_recipients' not in data:
                     data['email_recipients'] = ["menypeled@gmail.com"]  # Default recipient
+                print(f"INFO: Returning Firebase data with keys: {', '.join(data.keys() if data else [])}")
                 return data
             
     except Exception as e:
@@ -108,14 +132,21 @@ def format_window_key(start_date, end_date):
     return f"{start_date}_to_{end_date}"
 
 def save_data(data):
+    print(f"INFO: Saving data, Firebase initialized: {bool(firebase_admin._apps)}")
     try:
         # First try to save to Firebase
         if firebase_admin._apps:
+            print("INFO: Attempting to save data to Firebase")
             # Get a reference to the root of the database
             ref = db.reference('/')
             ref.set(data)
+            print(f"INFO: Data saved to Firebase with keys: {', '.join(data.keys() if data else [])}")
+        else:
+            print("WARNING: Firebase not initialized, skipping Firebase save")
     except Exception as e:
-        print(f"Error saving data to Firebase: {e}")
+        print(f"ERROR: Failed saving data to Firebase: {e}")
+        import traceback
+        print(traceback.format_exc())
     
     # Also save to local file as backup or if Firebase fails
     try:
@@ -202,11 +233,18 @@ def notify_peak(price, is_simulation=False):
         logging.error(f"[ALERT] Email notification process failed: {e}")
 
 def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
-    data = load_data()
-    today = get_today()
-    current_price = fetch_sn_price()
-    if current_price is None:
-        print("Could not fetch SN price.")
+    try:
+        data = load_data()
+        today = get_today()
+        current_price = fetch_sn_price()
+        
+        if current_price is None:
+            print("Could not fetch SN price.")
+            return
+    except Exception as e:
+        print(f"Error initializing monitor_stock: {e}")
+        import traceback
+        print(traceback.format_exc())
         return
         
     # Determine which trading window we're using
@@ -285,17 +323,38 @@ def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
     # Always update current price
     data[window_key]['current_price'] = round(current_price, 2)
 
-    # If the peak was simulated, only clear it on manual refresh
-    if manual_refresh and data[window_key].get('peak_simulated'):
-        data[window_key]['peak_price'] = data[window_key].get('last_real_peak_price', data[window_key]['baseline_price'])
-        data[window_key]['peak_date'] = data[window_key].get('last_real_peak_date', data[window_key]['baseline_date'])
-        data[window_key]['peak_simulated'] = False
-        save_data(data)
-        print(f"Simulated peak cleared. Restored last real peak for window {window_key}: {data[window_key]['peak_price']} on {data[window_key]['peak_date']}")
+    # When refreshing manually, always clear any simulated peak
+    if manual_refresh:
+        # Check if there was a simulated peak
+        if data[window_key].get('peak_simulated', False):
+            print(f"Detected simulated peak in window {window_key}. Restoring real data...")
+            
+            # Restore from last real peak, or use baseline if no real peak exists
+            last_real_price = data[window_key].get('last_real_peak_price')
+            last_real_date = data[window_key].get('last_real_peak_date')
+            
+            if last_real_price is not None and last_real_date is not None:
+                # If there was a real peak before simulation, restore it
+                data[window_key]['peak_price'] = last_real_price
+                data[window_key]['peak_date'] = last_real_date
+                print(f"Restored last real peak: ${last_real_price} on {last_real_date}")
+            else:
+                # If there was no real peak before, remove peak information completely
+                data[window_key]['peak_price'] = None
+                data[window_key]['peak_date'] = None
+                print(f"No previous real peak found. Peak info cleared.")
+            
+            # Mark as not simulated and save changes
+            data[window_key]['peak_simulated'] = False
+            save_data(data)
+            print(f"Simulated peak cleared for window {window_key}")
     # If not manual refresh and peak was simulated, keep it as is
 
     # Check for new real peak (must be above both previous peak and baseline)
-    last_real = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
+    # Use get() with fallback to safely access last_real_peak_price
+    last_real = data[window_key].get('last_real_peak_price')
+    if last_real is None:
+        last_real = data[window_key]['baseline_price']
     if current_price > max(last_real, data[window_key]['baseline_price']):
         data[window_key]['peak_price'] = round(current_price, 2)
         data[window_key]['peak_date'] = today
@@ -770,29 +829,102 @@ def api_status():
 
 @app.route('/api/refresh', methods=['POST'])
 def api_refresh():
-    monitor_stock(manual_refresh=True)  # Force a check with manual refresh flag
-    data = load_data()
-    
-    # Check if there's an active trading window set
-    if 'active_window' in data:
-        window_key = data['active_window']
-        window_data = data.get(window_key, {})
-        # Parse the window_key to get start and end dates
-        start_date, end_date = window_key.split('_to_')
-        return jsonify({
-            "status": {
-                "month": f"{start_date} to {end_date}",  # Display format
-                "window_start": start_date,
-                "window_end": end_date,
-                **window_data
-            }, 
-            "message": "Refreshed!"
-        })
-    else:
-        # Default to current month if no window is set
-        month = get_current_month()
-        month_data = data.get(month, {})
-        return jsonify({"status": {"month": month, **month_data}, "message": "Refreshed!"})
+    try:
+        print("Starting refresh operation...")
+        # First fetch the current stock price
+        current_price = fetch_sn_price()
+        if current_price is None:
+            return jsonify({"status": "error", "message": "Could not fetch current price"})
+            
+        # Get the current data
+        data = load_data()
+        
+        # We'll handle everything manually to avoid complex interactions
+        if 'active_window' in data:
+            window_key = data['active_window']
+            if window_key in data:
+                # Always update the current price
+                data[window_key]['current_price'] = round(current_price, 2)
+                
+                # If there's a simulated peak, reset it
+                if data[window_key].get('peak_simulated', False):
+                    data[window_key]['peak_price'] = None
+                    data[window_key]['peak_date'] = None
+                    data[window_key]['peak_simulated'] = False
+                    print(f"Cleared simulated peak for {window_key}")
+                
+                # Save the changes
+                save_data(data)
+                print("Updated data saved")
+                
+                # Now we'll fetch the data again to make sure we have the latest
+                data = load_data()
+                window_data = data.get(window_key, {})
+                
+                # Format the response based on window key format
+                try:
+                    if '_to_' in window_key:
+                        start_date, end_date = window_key.split('_to_')
+                        return jsonify({
+                            "status": {
+                                "month": f"{start_date} to {end_date}",
+                                "window_start": start_date,
+                                "window_end": end_date,
+                                **window_data
+                            },
+                            "message": "Refreshed!"
+                        })
+                    else:
+                        # For monthly windows
+                        return jsonify({"status": {"month": window_key, **window_data}, "message": "Refreshed!"})
+                except Exception as e:
+                    print(f"Error formatting response: {e}")
+                    return jsonify({"status": {"month": window_key, **window_data}, "message": "Refreshed!"})
+            else:
+                # Window key not found in data
+                return jsonify({"status": "error", "message": f"No data found for window {window_key}"})
+        else:
+            # No active window set
+            month = get_current_month()
+            month_data = data.get(month, {})
+            return jsonify({"status": {"month": month, **month_data}, "message": "Refreshed!"})
+        data = load_data()
+        
+        # Check if there's an active trading window set
+        if 'active_window' in data:
+            window_key = data['active_window']
+            window_data = data.get(window_key, {})
+            
+            try:
+                # Parse the window_key to get start and end dates
+                if '_to_' in window_key:
+                    start_date, end_date = window_key.split('_to_')
+                    return jsonify({
+                        "status": {
+                            "month": f"{start_date} to {end_date}",  # Display format
+                            "window_start": start_date,
+                            "window_end": end_date,
+                            **window_data
+                        }, 
+                        "message": "Refreshed!"
+                    })
+                else:
+                    # Handle case where window_key is not in expected format
+                    return jsonify({"status": {"month": window_key, **window_data}, "message": "Refreshed!"})
+            except Exception as e:
+                print(f"Error parsing window key: {e}")
+                # Fall back to using window_key as is
+                return jsonify({"status": {"month": window_key, **window_data}, "message": "Refreshed!"})
+        else:
+            # Default to current month if no window is set
+            month = get_current_month()
+            month_data = data.get(month, {})
+            return jsonify({"status": {"month": month, **month_data}, "message": "Refreshed!"})
+    except Exception as e:
+        print(f"Error in api_refresh: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "message": f"Refresh failed: {str(e)}"})
 
 @app.route('/api/set_trading_window', methods=['POST'])
 def api_set_window():
@@ -909,51 +1041,86 @@ def api_remove_email():
 
 @app.route('/api/simulate_peak', methods=['POST'])
 def api_simulate_peak():
-    # Simulate a new peak by incrementing last real peak by 100 and triggering notify_peak
-    data = load_data()
-    
-    # Check if there's an active trading window set
-    if 'active_window' in data:
-        window_key = data['active_window']
-        if window_key not in data:
-            return jsonify({"status": {"message": "No data for current trading window."}, "message": "No data found."})
-    else:
-        # Default to current month if no window is set
-        window_key = get_current_month()
-        if window_key not in data:
-            return jsonify({"status": {"month": window_key}, "message": "No data for this month."})
-    
-    # Get the last real peak (or baseline if no real peak)
-    last_real_peak = data[window_key]['last_real_peak_price'] if data[window_key]['last_real_peak_price'] is not None else data[window_key]['baseline_price']
-    
-    # Simulate a new peak by adding 100 to the last real peak
-    simulated_peak = round(last_real_peak + 100, 2)
-    data[window_key]['current_price'] = simulated_peak
-    data[window_key]['peak_price'] = simulated_peak
-    data[window_key]['peak_date'] = get_today()
-    data[window_key]['peak_simulated'] = True
-    save_data(data)
-    
-    # Send notification
-    notify_peak(simulated_peak, is_simulation=True)
-    
-    # Build response based on window type
-    if 'active_window' in data:
-        # Parse window for display
-        start_date, end_date = window_key.split('_to_')
-        return jsonify({
-            "status": {
-                "month": f"{start_date} to {end_date}",
-                "window_start": start_date,
-                "window_end": end_date,
-                **data[window_key]
-            }, 
-            "message": "Simulated peak!"
-        })
-    else:
-        return jsonify({"status": {"month": window_key, **data[window_key]}, "message": "Simulated peak!"})
+    try:
+        data = load_data()
+        
+        # Check if there's an active trading window set
+        if 'active_window' in data:
+            window_key = data['active_window']
+            if window_key not in data:
+                return jsonify({"status": {"message": "No data for current trading window."}, "message": "No data found."})
+        else:
+            # Default to current month if no window is set
+            window_key = get_current_month()
+            if window_key not in data:
+                return jsonify({"status": {"month": window_key}, "message": "No data for this month."})
+        
+        # Initialize fields if they don't exist
+        if 'last_real_peak_price' not in data[window_key]:
+            data[window_key]['last_real_peak_price'] = None
+            
+        if 'last_real_peak_date' not in data[window_key]:
+            data[window_key]['last_real_peak_date'] = None
+        
+        # Save the current peak as the last real peak before simulating
+        if not data[window_key].get('peak_simulated', False) and data[window_key].get('peak_price') is not None:
+            data[window_key]['last_real_peak_price'] = data[window_key]['peak_price']
+            data[window_key]['last_real_peak_date'] = data[window_key].get('peak_date')
+        
+        # Get the reference price for simulation
+        reference_price = 500  # Default fallback
+        
+        if data[window_key].get('last_real_peak_price') is not None:
+            reference_price = data[window_key]['last_real_peak_price']
+        elif data[window_key].get('peak_price') is not None and not data[window_key].get('peak_simulated', False):
+            reference_price = data[window_key]['peak_price']
+        elif data[window_key].get('baseline_price') is not None:
+            reference_price = data[window_key]['baseline_price']
+        elif data[window_key].get('current_price') is not None:
+            reference_price = data[window_key]['current_price']
+            
+        # Simulate a new peak by adding 100 to the reference price
+        simulated_peak = round(reference_price + 100, 2)
+        data[window_key]['current_price'] = simulated_peak
+        data[window_key]['peak_price'] = simulated_peak
+        data[window_key]['peak_date'] = get_today()
+        data[window_key]['peak_simulated'] = True
+        save_data(data)
+        
+        # Send notification
+        notify_peak(simulated_peak, is_simulation=True)
+        
+        # Build response based on window type
+        if 'active_window' in data and '_to_' in window_key:
+            # Parse window for display
+            start_date, end_date = window_key.split('_to_')
+            return jsonify({
+                "status": {
+                    "month": f"{start_date} to {end_date}",
+                    "window_start": start_date,
+                    "window_end": end_date,
+                    **data[window_key]
+                }, 
+                "message": "Simulated peak!"
+            })
+        else:
+            return jsonify({"status": {"month": window_key, **data[window_key]}, "message": "Simulated peak!"})
+    except Exception as e:
+        print(f"Error in simulate_peak: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return jsonify({"status": "error", "message": f"Failed to simulate peak: {str(e)}"})
 
 if __name__ == '__main__':
+    # Debug environment variables
+    print("--- Environment Information ---")
+    print(f"ENVIRONMENT: {os.environ.get('ENVIRONMENT')}")
+    print(f"RENDER: {os.environ.get('RENDER')}")
+    print(f"PORT: {os.environ.get('PORT')}")
+    print(f"FIREBASE_DATABASE_URL: {os.environ.get('FIREBASE_DATABASE_URL', 'NOT SET')}")
+    print(f"FIREBASE_SERVICE_ACCOUNT_JSON present: {bool(os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON'))}")
+    print("-----------------------------")
+    
     # Get port from environment variable for cloud deployment
     port = int(os.environ.get('PORT', 5003))
     
