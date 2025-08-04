@@ -423,7 +423,6 @@ def dashboard():
         <button onclick="refreshStatus()">Refresh</button>
         <button onclick="simulatePeak()">Simulate Peak</button>
         <button onclick="clearAll()" style="background:#b71c1c;">Clear</button>
-        <button onclick="testSound()" style="background:#4caf50;">Test Sound</button>
       </div>
       <div id="msg"></div>
     </div>
@@ -436,12 +435,6 @@ def dashboard():
         console.log("Notification sound played");
     }
     
-    // Function to test the notification sound
-    function testSound() {
-        playNotificationSound();
-        showMsg('Testing sound notification...', 'green');
-        setTimeout(()=>{document.getElementById('msg').innerText='';}, 1800);
-    }
     
     // Function to set the trading window
     function setTradingWindow() {
@@ -919,7 +912,7 @@ def api_simulate_peak():
 
 if __name__ == '__main__':
     # Get port from environment variable for cloud deployment
-    port = int(os.environ.get('PORT', 5001))
+    port = int(os.environ.get('PORT', 5002))
     
     # Only send email if not in production (to avoid spamming)
     if os.environ.get('ENVIRONMENT') != 'production':
