@@ -809,22 +809,44 @@ def dashboard():
 @app.route('/api/status')
 def api_status():
     data = load_data()
+    
+    # Fetch fresh stock price when status is requested
+    current_price = fetch_sn_price()
+    
     # Check if there's an active trading window set
     if 'active_window' in data:
         window_key = data['active_window']
         window_data = data.get(window_key, {})
+        
+        # Update the current price if we have a fresh one
+        if current_price is not None:
+            window_data['current_price'] = round(current_price, 2)
+            data[window_key] = window_data
+            save_data(data)
+        
         # Parse the window_key to get start and end dates
-        start_date, end_date = window_key.split('_to_')
-        return jsonify({
-            "month": f"{start_date} to {end_date}",  # Display format
-            "window_start": start_date,
-            "window_end": end_date,
-            **window_data
-        })
+        try:
+            start_date, end_date = window_key.split('_to_')
+            return jsonify({
+                "month": f"{start_date} to {end_date}",  # Display format
+                "window_start": start_date,
+                "window_end": end_date,
+                **window_data
+            })
+        except Exception:
+            # Fall back to using window_key as is
+            return jsonify({"month": window_key, **window_data})
     else:
         # Default to current month if no window is set
         month = get_current_month()
         month_data = data.get(month, {})
+        
+        # Update the current price if we have a fresh one
+        if current_price is not None:
+            month_data['current_price'] = round(current_price, 2)
+            data[month] = month_data
+            save_data(data)
+            
         return jsonify({"month": month, **month_data})
 
 @app.route('/api/refresh', methods=['POST'])
