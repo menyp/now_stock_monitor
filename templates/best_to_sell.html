@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Best Time to Sell ServiceNow</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    <style>
+    body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
+    .container { max-width: 800px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
+    /* Tab navigation */
+    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
+    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
+    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
+    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
+    h2 { margin-top: 0; color: #2c3e50; font-size: 1.7em; }
+    .subheading { color: #546e7a; font-size: 1em; margin-bottom: 25px; }
+    /* Chart area */
+    .chart-container { position: relative; height: 400px; margin: 30px 0; }
+    
+    /* Stats cards */
+    .stats-container { display: flex; flex-wrap: wrap; justify-content: space-around; margin: 25px 0; }
+    .stat-card { background-color: #f9fafc; border: 1px solid #e0e6ed; border-radius: 12px; padding: 16px; width: 30%; min-width: 210px; margin-bottom: 15px; }
+    .stat-card.highlight { background-color: #e3f2fd; border: 1px solid #1976d2; }
+    .stat-card h3 { color: #546e7a; font-size: 0.9em; margin: 0 0 8px 0; }
+    .stat-value { color: #1976d2; font-size: 1.6em; font-weight: 600; margin: 5px 0; }
+    .stat-card.highlight .stat-value { color: #0d47a1; font-weight: 700; }
+    .stat-desc { color: #78909c; font-size: 0.85em; }
+    
+    /* Legend */
+    .chart-legend { display: flex; justify-content: center; flex-wrap: wrap; margin-top: 15px; }
+    .legend-item { display: flex; align-items: center; margin: 0 12px 8px; }
+    .legend-color { width: 14px; height: 14px; border-radius: 3px; margin-right: 5px; }
+    .legend-label { font-size: 0.9em; color: #546e7a; }
+    
+    /* Empty state */
+    .empty-state { margin: 50px 0; padding: 30px; text-align: center; }
+    .empty-state h3 { color: #555; margin-bottom: 10px; }
+    
+    /* Recommendation box */
+    .recommendation-box { 
+        margin: 30px 0;
+        background-color: #f1f8e9;
+        border: 1px solid #c5e1a5;
+        border-radius: 12px;
+        padding: 20px;
+    }
+    .recommendation-box h3 { 
+        color: #558b2f;
+        margin-top: 0;
+        margin-bottom: 15px;
+        border-bottom: 1px solid #c5e1a5;
+        padding-bottom: 8px;
+    }
+    .recommendation-content {
+        color: #33691e;
+        font-size: 1.1em;
+        line-height: 1.5;
+    }
+    .action-strong {
+        font-weight: 600;
+    }
+    
+    @media (max-width: 600px) {
+      .container { padding: 20px 15px; margin: 20px auto; }
+      .stat-card { width: 100%; margin-bottom: 10px; }
+      h2 { font-size: 1.4em; }
+    }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tabs">
+            <a href="/" class="tab">SN Monitor</a>
+            <a href="/best-to-sell" class="tab active">Best to Sell</a>
+            <a href="/best-to-buy-sp" class="tab">Buy S&P</a>
+            <a href="/best-to-shift" class="tab">Shift to S&P</a>
+        </div>
+        <h2>Best Time to Sell ServiceNow</h2>
+        <p class="subheading">Analyze when to sell based on stock price and USD/ILS exchange rate</p>
+        
+        {% if common_dates %}
+        <div class="chart-container"><canvas id="profitabilityChart"></canvas></div>
+        {% else %}
+        <div class="empty-state">
+            <h3>No data available</h3>
+            <p>Unable to fetch historical data. Please try again later.</p>
+        </div>
+        {% endif %}
+        
+        <div class="chart-legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(54, 162, 235, 0.6);"></div>
+                <span class="legend-label">Profitability Score</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(255, 99, 132, 0.6);"></div>
+                <span class="legend-label">NOW Stock Price</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(75, 192, 192, 0.6);"></div>
+                <span class="legend-label">USD/ILS Rate</span>
+            </div>
+        </div>
+        
+        <div class="stats-container">
+            <div class="stat-card">
+                <h3>Current Profitability</h3>
+                <div class="stat-value">{{ formatted_current_profit }}</div>
+                <div class="stat-desc">Score out of 100</div>
+            </div>
+            <div class="stat-card highlight">
+                <h3>Best Day to Sell</h3>
+                <div class="stat-value">{{ formatted_best_date }}</div>
+                <div class="stat-desc">Score: {{ formatted_best_profit }}/100</div>
+            </div>
+            <div class="stat-card">
+                <h3>Current Metrics</h3>
+                <div class="stat-value">${{ formatted_current_stock }} / {{ formatted_current_rate }} ILS</div>
+                <div class="stat-desc">Stock Price / Exchange Rate</div>
+            </div>
+        </div>
+        
+        <div class="recommendation-box">
+            <h3>Recommendation</h3>
+            <div class="recommendation-content">
+                {{ recommendation_text|safe }}
+            </div>
+        </div>
+        
+        {% if common_dates %}
+        <script>
+        // Chart data
+        const dates = {{ dates_json|safe }};
+        const profitabilityData = {{ profitability_json|safe }};
+        const stockPricesData = {{ stock_prices_json|safe }};
+        const exchangeRatesData = {{ exchange_rates_json|safe }};
+        
+        if (dates.length > 0) {
+            const ctx = document.getElementById('profitabilityChart').getContext('2d');
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Profitability Score',
+                            data: profitabilityData,
+                            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                            borderColor: 'rgba(54, 162, 235, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            fill: true,
+                            yAxisID: 'y',
+                        },
+                        {
+                            label: 'NOW Stock Price',
+                            data: stockPricesData,
+                            backgroundColor: 'rgba(255, 99, 132, 0.0)',
+                            borderColor: 'rgba(255, 99, 132, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            yAxisID: 'y1',
+                        },
+                        {
+                            label: 'USD/ILS Rate',
+                            data: exchangeRatesData,
+                            backgroundColor: 'rgba(75, 192, 192, 0.0)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            yAxisID: 'y2',
+                        },
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    stacked: false,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    
+                                    if (context.datasetIndex === 0) {
+                                        return label + context.parsed.y + '/100';
+                                    } else if (context.datasetIndex === 1) {
+                                        return label + '$' + context.parsed.y;
+                                    } else {
+                                        return label + context.parsed.y + ' ILS';
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Profitability Score'
+                            },
+                            min: 0,
+                            max: 100,
+                            ticks: {
+                                color: 'rgba(54, 162, 235, 1)',
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Stock Price (USD)'
+                            },
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                            ticks: {
+                                color: 'rgba(255, 99, 132, 1)',
+                                callback: function(value, index, values) {
+                                    return '$' + value;
+                                }
+                            }
+                        },
+                        y2: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'USD/ILS Rate'
+                            },
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                            ticks: {
+                                color: 'rgba(75, 192, 192, 1)',
+                            }
+                        },
+                    }
+                }
+            });
+        }
+        </script>
+        {% endif %}
+    </div>
+</body>
+</html>

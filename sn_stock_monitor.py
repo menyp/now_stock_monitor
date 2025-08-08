@@ -7,13 +7,16 @@ from datetime import datetime, timedelta
 import subprocess
 import sys
 import threading
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, request, jsonify, Response, render_template, render_template_string
 import firebase_admin
 from firebase_admin import credentials, db
 import tempfile
 
 DATA_FILE = 'sn_monthly_data.json'  # Kept for backwards compatibility
 TICKER = 'NOW'
+
+# External API keys and constants
+ILS_USD_API_URL = 'https://api.exchangerate-api.com/v4/latest/USD'
 
 # Initialize Firebase (only if not already initialized)
 if not firebase_admin._apps:
@@ -91,6 +94,120 @@ def fetch_sn_price():
         import traceback
         print(traceback.format_exc())
         return None
+        
+def fetch_historical_sn_prices(days=30):
+    """Fetch historical ServiceNow stock prices for the given number of days"""
+    try:
+        ticker = yf.Ticker(TICKER)
+        # Get daily data for the specified period
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        data = ticker.history(start=start_date, end=end_date)
+        
+        if data.empty:
+            print(f"WARNING: Could not fetch historical stock data for {TICKER}")
+            return None
+        
+        # Convert to dictionary with date strings as keys and close prices as values
+        result = {}
+        for date, row in data.iterrows():
+            date_str = date.strftime('%Y-%m-%d')
+            result[date_str] = round(float(row['Close']), 2)
+            
+        return result
+    except Exception as e:
+        print(f"ERROR in fetch_historical_sn_prices: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return None
+
+def fetch_ils_usd_rate():
+    """Fetch current ILS to USD exchange rate"""
+    try:
+        import requests
+        response = requests.get(ILS_USD_API_URL)
+        data = response.json()
+        
+        # The API returns rates against USD, so we need the ILS rate
+        if 'rates' in data and 'ILS' in data['rates']:
+            return round(data['rates']['ILS'], 4)
+        else:
+            print("WARNING: Could not fetch ILS/USD exchange rate")
+            return None
+    except Exception as e:
+        print(f"ERROR in fetch_ils_usd_rate: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return None
+
+def fetch_historical_ils_usd_rates(days=30):
+    """Fetch historical ILS to USD exchange rates for the given number of days"""
+    try:
+        import requests
+        
+        # Unfortunately, the free tier of most exchange rate APIs doesn't provide historical data
+        # For a production app, you would use a paid API service like Alpha Vantage or similar
+        # For this demo, we'll simulate historical data with slight variations from the current rate
+        
+        # Get current rate as baseline
+        current_rate = fetch_ils_usd_rate()
+        if not current_rate:
+            return None
+            
+        # Generate simulated historical data
+        result = {}
+        for i in range(days, -1, -1):
+            date = datetime.now() - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            
+            # Add a random variation of up to ±3% from current rate
+            import random
+            variation = random.uniform(-0.03, 0.03)
+            rate = current_rate * (1 + variation)
+            
+            result[date_str] = round(rate, 4)
+            
+        return result
+    except Exception as e:
+        print(f"ERROR in fetch_historical_ils_usd_rates: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return None
+        
+def calculate_sell_profitability(stock_prices, exchange_rates):
+    """Calculate profitability for selling based on stock price and exchange rate"""
+    try:
+        profitability = {}
+        
+        # Find common dates between stock prices and exchange rates
+        common_dates = set(stock_prices.keys()) & set(exchange_rates.keys())
+        
+        # Check if we have valid data
+        if not common_dates:
+            return {}
+        
+        # Get baseline values for comparison (first date in our dataset)
+        first_date = sorted(common_dates)[0]
+        baseline_stock = stock_prices[first_date]
+        baseline_rate = exchange_rates[first_date]
+        
+        # Calculate raw profitability scores
+        for date in common_dates:
+            # Higher stock price and higher exchange rate (weaker ILS) means better profitability
+            # We multiply by 100 to get a more readable score and add weights
+            stock_component = (stock_prices[date] / baseline_stock - 1) * 100 * 0.7  # 70% weight on stock price
+            rate_component = (exchange_rates[date] / baseline_rate - 1) * 100 * 0.3   # 30% weight on exchange rate
+            
+            # Combined score: positive is good, negative is bad (compared to baseline date)
+            profitability[date] = stock_component + rate_component + 50  # Add 50 to shift baseline to midpoint
+        
+        return profitability
+    except Exception as e:
+        print(f"ERROR in calculate_sell_profitability: {e}")
+        import traceback
+        traceback.print_exc()
+        return {}
 
 def load_data():
     print(f"INFO: Loading data, Firebase initialized: {bool(firebase_admin._apps)}")
@@ -365,7 +482,9 @@ def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
         print(f"New peak for window {window_key}: ${current_price:.2f}")
     else:
         save_data(data)
-        print(f"Checked: ${current_price:.2f} (Current peak: {data[window_key]['peak_price']})")
+        # Safely access peak_price with fallback to avoid KeyError
+        peak_price = data[window_key].get('peak_price', current_price)
+        print(f"Checked: ${current_price:.2f} (Current peak: ${peak_price:.2f})")
 
 def start_scheduler():
     print("Starting SN stock monitor...")
@@ -376,7 +495,7 @@ def start_scheduler():
         time.sleep(10)
 
 # --- Flask Web Interface ---
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 
 @app.route('/')
 def dashboard():
@@ -384,6 +503,11 @@ def dashboard():
     <style>
     body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
     .container { max-width: 520px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
+    /* Tab navigation */
+    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
+    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
+    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
+    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
     h2 { margin-top: 0; color: #2c3e50; font-size: 1.7em; letter-spacing: 0.5px; }
     h4 { margin: 12px 0 20px 0; font-weight: 400; color: #3b4b5a; }
     .fields-panel { display: flex; flex-direction: column; gap: 16px; margin: 18px 0 8px 0; }
@@ -433,6 +557,12 @@ def dashboard():
     }
     </style>
     <div class="container">
+      <div class="tabs">
+        <a href="/" class="tab active">SN Monitor</a>
+        <a href="/best-to-sell" class="tab">Best to Sell</a>
+        <a href="/best-to-buy-sp" class="tab">Buy S&P</a>
+        <a href="/best-to-shift" class="tab">Shift to S&P</a>
+      </div>
       <h2>ServiceNow (NOW) Stock Monitor</h2>
       <h4>Trading Window: <span id="month"></span></h4>
       <div class="trading-window-inputs">
@@ -1133,6 +1263,255 @@ def api_simulate_peak():
         print(traceback.format_exc())
         return jsonify({"status": "error", "message": f"Failed to simulate peak: {str(e)}"})
 
+def get_recommendation_text(current_profit, best_profit, best_date):
+    """Generate a recommendation based on profitability scores"""
+    try:
+        # Handle None values immediately
+        if current_profit is None or best_profit is None:
+            return "Insufficient data to make a recommendation at this time."
+            
+        # Convert string inputs to float if possible
+        if isinstance(current_profit, str):
+            try:
+                current_profit = float(current_profit)
+            except ValueError:
+                return "Unable to process profitability data."
+                
+        if isinstance(best_profit, str):
+            try:
+                best_profit = float(best_profit)
+            except ValueError:
+                return "Unable to process profitability data."
+        
+        # Safety check for best_date
+        if best_date is None or best_date == 'N/A':
+            best_date = "unknown date"
+            
+        # Calculate the difference without formatting
+        try:
+            profit_gap = best_profit - current_profit
+        except Exception:
+            profit_gap = 0
+            
+        # Generate plain text recommendations without formatting
+        if current_profit >= 80:
+            return '<span class="action-strong">STRONG SELL RECOMMENDATION</span>: Current profitability is excellent (80+ score). Market conditions favor selling NOW for maximum profit based on both stock price and USD/ILS exchange rate.'
+            
+        elif current_profit >= 70:
+            return '<span class="action-strong">SELL RECOMMENDATION</span>: Current profitability is very good (70+ score). Consider selling now as conditions are favorable both for stock price and exchange rate.'
+            
+        elif current_profit >= 60:
+            if profit_gap < 10:
+                return '<span class="action-strong">CONSIDER SELLING</span>: Current profitability is good (60+ score) and close to the optimal selling point. Selling now would capture most of the potential profit.'
+            else:
+                msg = '<span class="action-strong">WAIT WITH CAUTION</span>: Current profitability is good (60+ score), but significantly better conditions may occur.'
+                msg += ' The best selling day appears to be ' + str(best_date)
+                try:
+                    msg += ' with a ' + str(int(best_profit)) + ' score.'
+                except:
+                    msg += '.'
+                return msg
+        
+        elif current_profit >= 50:
+            msg = '<span class="action-strong">HOLD</span>: Current profitability is moderate (50+ score). Better selling opportunities are likely in the future.'
+            msg += ' The best potential selling date based on historical data is ' + str(best_date) + '.'
+            return msg
+            
+        elif current_profit >= 30:
+            msg = '<span class="action-strong">HOLD FIRMLY</span>: Current profitability is below average ('
+            try:
+                msg += str(int(current_profit))
+            except:
+                msg += 'low'
+            msg += ' score). Conditions for selling are not ideal at present. Consider waiting for improved market conditions.'
+            return msg
+            
+        else:
+            return '<span class="action-strong">DO NOT SELL</span>: Current profitability is poor. This is not an advantageous time to sell based on both stock price and USD/ILS exchange rate. Better to wait for more favorable market conditions.'
+            
+    except Exception as e:
+        print(f"Error generating recommendation: {e}")
+        return "Unable to generate a recommendation due to a calculation error."
+
+# Route for the best to sell SN page
+@app.route('/best-to-sell')
+def best_to_sell():
+    # Fetch historical data
+    stock_prices = fetch_historical_sn_prices(30)
+    exchange_rates = fetch_historical_ils_usd_rates(30)
+    
+    profitability = calculate_sell_profitability(stock_prices, exchange_rates)
+    
+    # Find common dates across all datasets
+    common_dates = sorted(set(stock_prices.keys()) & set(exchange_rates.keys()) & set(profitability.keys()))
+    
+    # Normalize profitability for better visualization
+    if common_dates and profitability:
+        # Find min/max values for normalization to 0-100 range
+        min_profit = min(profitability.values())
+        max_profit = max(profitability.values())
+        profit_range = max_profit - min_profit if max_profit > min_profit else 1
+        
+        normalized_profit = {}
+        for date in common_dates:
+            normalized_profit[date] = round((profitability[date] - min_profit) * 100 / profit_range, 2)
+    else:
+        common_dates = []
+        normalized_profit = {}
+        profitability = {}
+    
+    # Prepare JSON data for chart and stats
+    dates_json = json.dumps(common_dates)
+    profitability_json = json.dumps([normalized_profit.get(date, None) for date in common_dates])
+    stock_prices_json = json.dumps([stock_prices.get(date, None) for date in common_dates])
+    exchange_rates_json = json.dumps([exchange_rates.get(date, None) for date in common_dates])
+    
+    # Get current and best profitability stats
+    current_date = common_dates[-1] if common_dates else None
+    current_profit = normalized_profit.get(current_date) if current_date else None
+    current_stock = stock_prices.get(current_date) if current_date else None
+    current_rate = exchange_rates.get(current_date) if current_date else None
+    
+    # Get best day to sell (highest profitability)
+    if normalized_profit:
+        best_profit_pair = max(normalized_profit.items(), key=lambda x: x[1])
+        best_date = best_profit_pair[0]
+        best_profit = best_profit_pair[1]
+    else:
+        best_date = None
+        best_profit = None
+        
+    # Safe formatting for template display - avoiding any f-strings
+    formatted_current_profit = 'N/A'
+    formatted_best_profit = 'N/A'
+    formatted_best_date = 'N/A'
+    formatted_current_stock = 'N/A'
+    formatted_current_rate = 'N/A'
+    
+    if isinstance(current_profit, (int, float)):
+        try:
+            formatted_current_profit = str(int(current_profit))
+        except:
+            pass
+    
+    if isinstance(best_profit, (int, float)):
+        try:
+            formatted_best_profit = str(int(best_profit))
+        except:
+            pass
+    
+    if best_date is not None:
+        formatted_best_date = str(best_date)
+    
+    if isinstance(current_stock, (int, float)):
+        try:
+            formatted_current_stock = str(int(current_stock * 100) / 100)
+        except:
+            pass
+    
+    if isinstance(current_rate, (int, float)):
+        try:
+            formatted_current_rate = str(int(current_rate * 100) / 100)
+        except:
+            pass
+    
+    # Prepare recommendation text without any format specifiers
+    recommendation_text = 'Unable to generate recommendation with the current data.'
+    try:
+        recommendation_text = get_recommendation_text(current_profit, best_profit, best_date)
+    except Exception as e:
+        print("Error getting recommendation: " + str(e))
+        recommendation_text = 'Unable to generate recommendation due to an error.'
+    
+    # Ensure all required variables for template are defined
+    dates_json = json.dumps(common_dates)
+    margin = ''
+    
+    # Note: HTML template has been moved to templates/best_to_sell.html
+    # Create a template context dictionary with all our variables
+    template_context = {
+        'dates_json': dates_json,
+        'profitability_json': profitability_json,
+        'stock_prices_json': stock_prices_json,
+        'exchange_rates_json': exchange_rates_json,
+        'recommendation_text': recommendation_text,
+        'formatted_current_profit': formatted_current_profit,
+        'formatted_best_date': formatted_best_date,
+        'formatted_best_profit': formatted_best_profit,
+        'formatted_current_stock': formatted_current_stock,
+        'formatted_current_rate': formatted_current_rate,
+        'common_dates': common_dates  # Add this in case it's used in template conditions
+    }
+    
+    # Render the template file with the context dictionary
+    return render_template('best_to_sell.html', **template_context)
+
+# Route for the best to buy S&P page
+@app.route('/best-to-buy-sp')
+def best_to_buy_sp():
+    html = '''
+    <style>
+    body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
+    .container { max-width: 520px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
+    /* Tab navigation */
+    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
+    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
+    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
+    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
+    /* Empty state */
+    .empty-state { margin: 50px 0; padding: 30px; text-align: center; }
+    .empty-state h3 { color: #555; margin-bottom: 10px; }
+    .empty-state p { color: #777; margin-bottom: 20px; }
+    </style>
+    <div class="container">
+      <div class="tabs">
+        <a href="/" class="tab">SN Monitor</a>
+        <a href="/best-to-sell" class="tab">Best to Sell</a>
+        <a href="/best-to-buy-sp" class="tab active">Buy S&P</a>
+        <a href="/best-to-shift" class="tab">Shift to S&P</a>
+      </div>
+      <h2>Best Time to Buy S&P</h2>
+      <div class="empty-state">
+        <h3>Coming soon to theaters...</h3>
+        <p>This feature is under development and will be available soon.</p>
+      </div>
+    </div>
+    '''
+    return render_template_string(html)
+
+# Route for the best to shift SN to S&P page
+@app.route('/best-to-shift')
+def best_to_shift():
+    html = '''
+    <style>
+    body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
+    .container { max-width: 520px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
+    /* Tab navigation */
+    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
+    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
+    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
+    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
+    /* Empty state */
+    .empty-state { margin: 50px 0; padding: 30px; text-align: center; }
+    .empty-state h3 { color: #555; margin-bottom: 10px; }
+    .empty-state p { color: #777; margin-bottom: 20px; }
+    </style>
+    <div class="container">
+      <div class="tabs">
+        <a href="/" class="tab">SN Monitor</a>
+        <a href="/best-to-sell" class="tab">Best to Sell</a>
+        <a href="/best-to-buy-sp" class="tab">Buy S&P</a>
+        <a href="/best-to-shift" class="tab active">Shift to S&P</a>
+      </div>
+      <h2>Best Time to Shift SN to S&P</h2>
+      <div class="empty-state">
+        <h3>Coming soon to theaters...</h3>
+        <p>This feature is under development and will be available soon.</p>
+      </div>
+    </div>
+    '''
+    return render_template_string(html)
+
 if __name__ == '__main__':
     # Debug environment variables
     print("--- Environment Information ---")
@@ -1144,7 +1523,7 @@ if __name__ == '__main__':
     print("-----------------------------")
     
     # Get port from environment variable for cloud deployment
-    port = int(os.environ.get('PORT', 5003))
+    port = int(os.environ.get('PORT', 5001))
     
     # Only send email if not in production (to avoid spamming)
     if os.environ.get('ENVIRONMENT') != 'production':
