@@ -7,53 +7,6 @@
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        .chart-container {
-            position: relative;
-            height: 60vh;
-            width: 95%;
-            margin: 20px auto;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 15px;
-            background-color: white;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        }
-        
-        .stats-container {
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            margin: 20px 0;
-        }
-        
-        .stat-card {
-            flex: 1;
-            min-width: 200px;
-            background: white;
-            padding: 15px;
-            margin: 10px;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-        
-        .stat-card.highlight {
-            background: #e3f2fd;
-            border: 2px solid #2196f3;
-        }
-        
-        .stat-value {
-            font-size: 1.5em;
-            font-weight: bold;
-            margin: 10px 0;
-            color: #333;
-        }
-        
-        .stat-desc {
-            color: #666;
-        }
-    </style>
 </head>
 <body>
     <div class="container">
@@ -206,27 +159,6 @@
                 console.log('Final best date index for gold dot:', bestDateIndex, 'with date:', dates[bestDateIndex]);
                 
                 // Create chart with the best day highlighted
-                // Create an array of point colors where only the best day is gold
-                const pointBackgroundColors = [];
-                const pointBorderColors = [];
-                const pointRadiuses = [];
-                const pointBorderWidths = [];
-                
-                // Pre-calculate all point styles
-                for (let i = 0; i < dates.length; i++) {
-                    if (i === bestDateIndex) {
-                        pointBackgroundColors.push('gold');
-                        pointBorderColors.push('goldenrod');
-                        pointRadiuses.push(8);
-                        pointBorderWidths.push(2);
-                    } else {
-                        pointBackgroundColors.push('rgba(54, 162, 235, 1)');
-                        pointBorderColors.push('rgba(54, 162, 235, 1)');
-                        pointRadiuses.push(3);
-                        pointBorderWidths.push(1);
-                    }
-                }
-                
                 new Chart(ctx, {
                     type: 'line',
                     data: {
@@ -241,12 +173,20 @@
                                 tension: 0.2,
                                 fill: true,
                                 yAxisID: 'y',
-                                pointRadius: pointRadiuses,
-                                pointBackgroundColor: pointBackgroundColors,
-                                pointBorderColor: pointBorderColors,
-                                pointBorderWidth: pointBorderWidths,
-                                pointHoverRadius: 7,
-                                pointStyle: 'circle'
+                                pointRadius: function(context) {
+                                    return context.dataIndex === bestDateIndex ? 8 : 3;
+                                },
+                                pointBackgroundColor: function(context) {
+                                    return context.dataIndex === bestDateIndex ? 'gold' : 'rgba(54, 162, 235, 1)';
+                                },
+                                pointBorderColor: function(context) {
+                                    return context.dataIndex === bestDateIndex ? 'goldenrod' : 'rgba(54, 162, 235, 1)';
+                                },
+                                pointBorderWidth: function(context) {
+                                    return context.dataIndex === bestDateIndex ? 2 : 1;
+                                },
+                                pointStyle: 'circle',
+                                pointHoverRadius: 7
                             },
                             {
                                 label: 'NOW Stock Price',
@@ -273,7 +213,6 @@
                         ]
                     },
                     options: {
-                        maintainAspectRatio: false,
                         responsive: true,
                         interaction: {
                             mode: 'index',
@@ -365,14 +304,6 @@
                                 ticks: {
                                     color: 'rgba(75, 192, 192, 1)'
                                 }
-                            }
-                        },
-                        elements: {
-                            point: {
-                                radius: 3
-                            },
-                            line: {
-                                tension: 0.3
                             }
                         }
                     }

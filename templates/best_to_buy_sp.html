@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Best Time to Buy S&P</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1/dist/chart.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+    body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
+    .container { max-width: 800px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
+    /* Tab navigation */
+    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
+    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
+    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
+    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
+    h2 { margin-top: 0; color: #2c3e50; font-size: 1.7em; }
+    .subheading { color: #546e7a; font-size: 1em; margin-bottom: 25px; }
+    /* Chart area */
+    .chart-container { position: relative; height: 400px; margin: 30px 0; }
+    
+    /* Stats cards */
+    .stats-container { display: flex; flex-wrap: wrap; justify-content: space-around; margin: 25px 0; }
+    .stat-card { background-color: #f9fafc; border: 1px solid #e0e6ed; border-radius: 12px; padding: 16px; width: 30%; min-width: 210px; margin-bottom: 15px; }
+    .stat-card.highlight { background-color: #e3f2fd; border: 1px solid #1976d2; }
+    .stat-card h3 { color: #546e7a; font-size: 0.9em; margin: 0 0 8px 0; }
+    .stat-value { color: #1976d2; font-size: 1.6em; font-weight: 600; margin: 5px 0; }
+    .stat-card.highlight .stat-value { color: #0d47a1; font-weight: 700; }
+    .stat-desc { color: #78909c; font-size: 0.85em; }
+    
+    /* Legend */
+    .chart-legend { display: flex; justify-content: center; flex-wrap: wrap; margin-top: 15px; }
+    .legend-item { display: flex; align-items: center; margin: 0 12px 8px; }
+    .legend-color { width: 14px; height: 14px; border-radius: 3px; margin-right: 5px; }
+    .legend-label { font-size: 0.9em; color: #546e7a; }
+    
+    /* Empty state */
+    .empty-state { margin: 50px 0; padding: 30px; text-align: center; }
+    .empty-state h3 { color: #555; margin-bottom: 10px; }
+    
+    /* Recommendation box */
+    .recommendation-box { 
+        margin: 30px 0;
+        background-color: #e8f5e9;
+        border: 1px solid #a5d6a7;
+        border-radius: 12px;
+        padding: 20px;
+    }
+    .recommendation-box h3 { 
+        color: #2e7d32;
+        margin-top: 0;
+        margin-bottom: 15px;
+        border-bottom: 1px solid #a5d6a7;
+        padding-bottom: 8px;
+    }
+    .recommendation-content {
+        color: #1b5e20;
+        font-size: 1.1em;
+        line-height: 1.5;
+    }
+    .action-strong {
+        font-weight: 600;
+    }
+    
+    /* Tooltip styles */
+    .tooltip-container {
+        position: relative;
+        display: inline-block;
+        margin-left: 5px;
+        cursor: pointer;
+    }
+    
+    .tooltip-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        color: #1976d2;
+        font-size: 16px;
+        margin-left: 6px;
+        cursor: pointer;
+        opacity: 0.85;
+        transition: opacity 0.2s, transform 0.2s;
+    }
+    
+    .tooltip-icon:hover {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+    
+    .tooltip-content {
+        visibility: hidden;
+        position: absolute;
+        z-index: 100;
+        width: 280px;
+        background-color: #fff;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+        text-align: left;
+        left: 50%;
+        transform: translateX(-50%);
+        bottom: 30px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+    
+    .tooltip-container:hover .tooltip-content {
+        visibility: visible;
+        opacity: 1;
+    }
+    
+    .tooltip-title {
+        font-weight: bold;
+        color: #1976d2;
+        margin-bottom: 8px;
+        font-size: 14px;
+    }
+    
+    .tooltip-calculation {
+        font-size: 13px;
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #eee;
+    }
+    
+    .tooltip-list {
+        margin: 0;
+        padding-left: 20px;
+        font-size: 12px;
+        color: #555;
+    }
+    
+    .tooltip-list li {
+        margin-bottom: 4px;
+    }
+    
+    .tooltip-section-title {
+        font-weight: 600;
+        font-size: 13px;
+        margin: 8px 0 4px;
+        color: #333;
+    }
+    
+    /* Timeframe selector styles */
+    .timeframe-selector {
+        margin: 0 auto 20px;
+        max-width: 300px;
+    }
+    
+    .timeframe-selector label {
+        font-size: 0.9em;
+        color: #546e7a;
+        margin-right: 10px;
+    }
+    
+    .timeframe-selector select {
+        padding: 6px 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background-color: #fff;
+        color: #333;
+        font-size: 0.9em;
+        cursor: pointer;
+        transition: border-color 0.3s;
+    }
+    
+    .timeframe-selector select:hover {
+        border-color: #1976d2;
+    }
+    
+    .timeframe-selector select:focus {
+        outline: none;
+        border-color: #1976d2;
+        box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2);
+    }
+    
+    @media (max-width: 600px) {
+      .container { padding: 20px 15px; margin: 20px auto; }
+      .stat-card { width: 100%; margin-bottom: 10px; }
+      h2 { font-size: 1.4em; }
+    }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="tabs">
+            <a href="/" class="tab">SN Monitor</a>
+            <a href="/best-to-sell" class="tab">Best to Sell</a>
+            <a href="/best-to-buy-sp" class="tab active">Buy S&P</a>
+            <a href="/best-to-shift" class="tab">Shift to S&P</a>
+        </div>
+        <h2>Best Time to Buy S&P</h2>
+        <p class="subheading">Analyze when to buy based on S&P price and USD/ILS exchange rate</p>
+        
+        <!-- Timeframe selector dropdown -->
+        <div class="timeframe-selector">
+            <form action="/best-to-buy-sp" method="get">
+                <label for="timeframe">Analysis period:</label>
+                <select id="timeframe" name="timeframe" onchange="this.form.submit()">
+                    <option value="30" {% if timeframe == 30 %}selected{% endif %}>Last 30 days</option>
+                    <option value="60" {% if timeframe == 60 %}selected{% endif %}>Last 60 days</option>
+                    <option value="90" {% if timeframe == 90 %}selected{% endif %}>Last 90 days (quarterly)</option>
+                </select>
+            </form>
+        </div>
+        
+        {% if common_dates %}
+        <div class="chart-container"><canvas id="profitabilityChart"></canvas></div>
+        {% else %}
+        <div class="empty-state">
+            <h3>No data available</h3>
+            <p>Unable to fetch historical data. Please try again later.</p>
+        </div>
+        {% endif %}
+        
+        <div class="chart-legend">
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(76, 175, 80, 0.6);"></div>
+                <span class="legend-label">Buying Opportunity Score</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: gold;"></div>
+                <span class="legend-label">Best Day to Buy</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(255, 152, 0, 0.6);"></div>
+                <span class="legend-label">S&P 500 Price</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: rgba(75, 192, 192, 0.6);"></div>
+                <span class="legend-label">USD/ILS Rate</span>
+            </div>
+        </div>
+        
+        <div class="stats-container">
+            <div class="stat-card">
+                <h3>
+                    Current Buying Score
+                    <div class="tooltip-container">
+                        <div class="tooltip-icon"><i class="fas fa-info-circle"></i></div>
+                        <div class="tooltip-content">
+                            <div class="tooltip-title">Understanding the Buying Score</div>
+                            <div class="tooltip-calculation">{{ score_explanation.calculation }}</div>
+                            
+                            <div class="tooltip-section-title">What Factors Impact the Score:</div>
+                            <ul class="tooltip-list">
+                                {% for factor in score_explanation.factors %}
+                                <li>{{ factor }}</li>
+                                {% endfor %}
+                            </ul>
+                            
+                            <div class="tooltip-section-title">What to Wait For:</div>
+                            <ul class="tooltip-list">
+                                {% for item in score_explanation.waiting_for %}
+                                <li>{{ item }}</li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                </h3>
+                <div class="stat-value">{{ formatted_current_profit }}</div>
+                <div class="stat-desc">Score out of 100</div>
+            </div>
+            <div class="stat-card highlight">
+                <h3>Best Day to Buy</h3>
+                <div class="stat-value">{{ formatted_best_date }}</div>
+                <div class="stat-desc">Score: {{ formatted_best_profit }}/100</div>
+            </div>
+            <div class="stat-card">
+                <h3>Current Metrics</h3>
+                <div class="stat-value">{{ formatted_current_stock }} / {{ formatted_current_rate }} ILS</div>
+                <div class="stat-desc">S&P Price / Exchange Rate</div>
+            </div>
+        </div>
+        
+        <div class="recommendation-box">
+            <h3>
+                Recommendation
+                <div class="tooltip-container">
+                    <div class="tooltip-icon"><i class="fas fa-info-circle"></i></div>
+                    <div class="tooltip-content">
+                        <div class="tooltip-title">What Might Trigger a Better Score</div>
+                        <ul class="tooltip-list">
+                            {% for item in score_explanation.waiting_for %}
+                            <li>{{ item }}</li>
+                            {% endfor %}
+                        </ul>
+                        <div class="tooltip-section-title">When to Check Back:</div>
+                        <ul class="tooltip-list">
+                            <li>After significant S&P 500 price drops</li>
+                            <li>After ILS strengthens against USD (lower USD/ILS rate)</li>
+                            <li>During market corrections or downturns</li>
+                            <li>Following Federal Reserve interest rate decisions</li>
+                        </ul>
+                    </div>
+                </div>
+            </h3>
+            <div class="recommendation-content">
+                {{ recommendation_text|safe }}
+            </div>
+        </div>
+        
+        {% if common_dates %}
+        <script>
+        /* Chart data */
+        var dates = {{ dates_json|safe }};
+        var profitabilityData = {{ profitability_json|safe }};
+        var stockPricesData = {{ stock_prices_json|safe }};
+        var exchangeRatesData = {{ exchange_rates_json|safe }};
+        var bestDate = "{{ formatted_best_date|safe }}";
+        
+        // Find the index of the best date in the dates array
+        var bestDateIndex = dates.indexOf(bestDate);
+        
+        if (dates.length > 0) {
+            var ctx = document.getElementById('profitabilityChart').getContext('2d');
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        {
+                            label: 'Buying Opportunity Score',
+                            data: profitabilityData,
+                            backgroundColor: 'rgba(76, 175, 80, 0.2)',
+                            borderColor: 'rgba(76, 175, 80, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            fill: true,
+                            yAxisID: 'y',
+                            pointRadius: function(context) {
+                                // Make the best date point larger
+                                var index = context.dataIndex;
+                                return index === bestDateIndex ? 8 : 0;
+                            },
+                            pointBackgroundColor: function(context) {
+                                // Color the best date point gold
+                                var index = context.dataIndex;
+                                return index === bestDateIndex ? 'gold' : 'rgba(76, 175, 80, 1)';
+                            },
+                            pointBorderColor: function(context) {
+                                // Gold border for the best date point
+                                var index = context.dataIndex;
+                                return index === bestDateIndex ? 'goldenrod' : 'rgba(76, 175, 80, 1)';
+                            },
+                            pointBorderWidth: function(context) {
+                                var index = context.dataIndex;
+                                return index === bestDateIndex ? 2 : 0;
+                            },
+                        },
+                        {
+                            label: 'S&P 500 Price',
+                            data: stockPricesData,
+                            backgroundColor: 'rgba(255, 152, 0, 0.0)',
+                            borderColor: 'rgba(255, 152, 0, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            yAxisID: 'y1'
+                        },
+                        {
+                            label: 'USD/ILS Rate',
+                            data: exchangeRatesData,
+                            backgroundColor: 'rgba(75, 192, 192, 0.0)',
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            borderWidth: 2,
+                            tension: 0.2,
+                            yAxisID: 'y2'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    stacked: false,
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    var label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    
+                                    if (context.datasetIndex === 0) {
+                                        return label + '$' + String(context.parsed.y);
+                                    } else if (context.datasetIndex === 1) {
+                                        return label + String(context.parsed.y);
+                                    } else {
+                                        return label + String(context.parsed.y) + ' ILS';
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Buying Opportunity Score'
+                            },
+                            min: 0,
+                            max: 100,
+                            ticks: {
+                                color: 'rgba(76, 175, 80, 1)'
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'S&P 500 Price (USD)'
+                            },
+                            grid: {
+                                drawOnChartArea: false
+                            },
+                            ticks: {
+                                color: 'rgba(255, 152, 0, 1)',
+                                callback: function(value) {
+                                    return String(value) + ' points';
+                                }
+                            }
+                        },
+                        y2: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'USD/ILS Rate'
+                            },
+                            grid: {
+                                drawOnChartArea: false
+                            },
+                            ticks: {
+                                color: 'rgba(75, 192, 192, 1)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        </script>
+        {% endif %}
+    </div>
+</body>
+</html>

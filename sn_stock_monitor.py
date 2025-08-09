@@ -11,12 +11,219 @@ from flask import Flask, request, jsonify, Response, render_template, render_tem
 import firebase_admin
 from firebase_admin import credentials, db
 import tempfile
+import pandas as pd
+import numpy as np
+import logging
+
+# Custom JSON encoder for pandas Series and other non-serializable objects
+class SafeJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if hasattr(obj, 'item'):
+            try:
+                return obj.item()  # Extract scalar from pandas Series
+            except:
+                return str(obj)
+        elif pd.isna(obj) or obj is pd.NaT:
+            return None
+        elif hasattr(obj, 'isoformat'):  # Handle datetime objects
+            return obj.isoformat()
+        elif isinstance(obj, (pd.Series, pd.DataFrame)):
+            return obj.to_dict()
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+# Helper function for safe JSON serialization
+def safe_json_dumps(obj):
+    return json.dumps(obj, cls=SafeJSONEncoder)
+
+# Helper functions for tooltips and explanations
+def get_sell_score_explanation():
+    """Return explanation of how the sell profitability score is calculated"""
+    return {
+        'calculation': 'Profitability Score = (70% × Stock Price Impact) + (30% × Exchange Rate Impact)',
+        'factors': [
+            'Higher ServiceNow stock price increases score (70% weight)',
+            'Higher USD/ILS exchange rate increases score (30% weight)',
+            'Score ranges from 0-100, with 50 as the baseline (neutral point)',
+            'Both factors need to align for optimal selling conditions'
+        ],
+        'waiting_for': [
+            'Stock price increases (watch the BLUE line in the graph)',
+            'USD strengthening against ILS (watch the RED line increasing)',
+            'For best results: Look for NOW stock price rising while USD/ILS exchange rate is increasing'
+        ]
+    }
+
+def get_buy_score_explanation():
+    """Return explanation of how the buy profitability score is calculated"""
+    return {
+        'calculation': 'Profitability Score = (70% × S&P Price Impact) + (30% × Exchange Rate Impact)',
+        'factors': [
+            'Lower S&P 500 price increases score (70% weight)',
+            'Lower USD/ILS exchange rate increases score (30% weight)',
+            'Score ranges from 0-100, with higher values indicating better buying opportunities',
+            'Both factors need to align for optimal buying conditions'
+        ],
+        'waiting_for': [
+            'S&P 500 price dips (watch the BLUE line in the graph)',
+            'ILS strengthening against USD (watch the RED line decreasing)',
+            'For best results: Look for S&P price falling while USD/ILS exchange rate is decreasing'
+        ]
+    }
+
+# Function to prepare template data with safe serialization
+def prepare_template_data(common_dates, profitability, prices, rates, current_profit=None, 
+                          best_profit=None, best_date=None, current_price=None, current_rate=None):
+    """Safely prepare all data for template rendering, handling pandas Series objects properly"""
+    # Create safe versions of all data
+    if not common_dates:
+        return {
+            'common_dates': [],
+            'dates_json': '[]',
+            'profitability_json': '[]',
+            'stock_prices_json': '[]',
+            'exchange_rates_json': '[]',
+            'formatted_current_profit': 'N/A',
+            'formatted_best_profit': 'N/A',
+            'formatted_best_date': 'N/A',
+            'formatted_current_stock': 'N/A',
+            'formatted_current_rate': 'N/A',
+            'recommendation_text': 'Insufficient data to make a recommendation.'
+        }
+    
+    # Convert all data to safe, serializable formats
+    safe_dates = []
+    safe_profits = []
+    safe_prices = []
+    safe_rates = []
+    
+    for date in common_dates:
+        # Add safe date
+        safe_dates.append(str(date))
+        
+        # Add safe profit value
+        try:
+            value = profitability[date]
+            if hasattr(value, 'item'):
+                safe_profits.append(round(float(value.item()), 2))
+            else:
+                safe_profits.append(round(float(value), 2))
+        except (ValueError, TypeError):
+            safe_profits.append(None)
+        
+        # Add safe price value
+        try:
+            value = prices[date]
+            if hasattr(value, 'item'):
+                safe_prices.append(round(float(value.item()), 2))
+            else:
+                safe_prices.append(round(float(value), 2))
+        except (ValueError, TypeError):
+            safe_prices.append(None)
+        
+        # Add safe exchange rate
+        try:
+            value = rates[date]
+            if hasattr(value, 'item'):
+                safe_rates.append(round(float(value.item()), 4))
+            else:
+                safe_rates.append(round(float(value), 4))
+        except (ValueError, TypeError):
+            safe_rates.append(None)
+    
+    # Format scalar values
+    try:
+        current_profit_scalar = float(current_profit.item()) if hasattr(current_profit, 'item') else float(current_profit) if current_profit is not None else None
+    except (TypeError, ValueError):
+        current_profit_scalar = None
+        
+    try:
+        best_profit_scalar = float(best_profit.item()) if hasattr(best_profit, 'item') else float(best_profit) if best_profit is not None else None
+    except (TypeError, ValueError):
+        best_profit_scalar = None
+        
+    try:
+        current_price_scalar = float(current_price.item()) if hasattr(current_price, 'item') else float(current_price) if current_price is not None else None
+    except (TypeError, ValueError):
+        current_price_scalar = None
+        
+    try:
+        current_rate_scalar = float(current_rate.item()) if hasattr(current_rate, 'item') else float(current_rate) if current_rate is not None else None
+    except (TypeError, ValueError):
+        current_rate_scalar = None
+    
+    # Format for display
+    formatted_current_profit = f"{current_profit_scalar:.1f}" if current_profit_scalar is not None else "N/A"
+    formatted_best_profit = f"{best_profit_scalar:.1f}" if best_profit_scalar is not None else "N/A"
+    
+    if best_date is not None:
+        if hasattr(best_date, 'item'):
+            try:
+                formatted_best_date = str(best_date.item())
+            except:
+                formatted_best_date = str(best_date)
+        else:
+            formatted_best_date = str(best_date)
+    else:
+        formatted_best_date = "N/A"
+        
+    formatted_current_stock = f"{current_price_scalar:.2f}" if current_price_scalar is not None else "N/A"
+    formatted_current_rate = f"{current_rate_scalar:.2f}" if current_rate_scalar is not None else "N/A"
+    
+    # JSON serialize data using our safe encoder
+    dates_json = safe_json_dumps(safe_dates)
+    profitability_json = safe_json_dumps(safe_profits)
+    stock_prices_json = safe_json_dumps(safe_prices)
+    exchange_rates_json = safe_json_dumps(safe_rates)
+    
+    return {
+        'common_dates': safe_dates,
+        'dates_json': dates_json,
+        'profitability_json': profitability_json,
+        'stock_prices_json': stock_prices_json,
+        'exchange_rates_json': exchange_rates_json,
+        'formatted_current_profit': formatted_current_profit,
+        'formatted_best_profit': formatted_best_profit,
+        'formatted_best_date': formatted_best_date,
+        'formatted_current_stock': formatted_current_stock,
+        'formatted_current_rate': formatted_current_rate
+    }
 
 DATA_FILE = 'sn_monthly_data.json'  # Kept for backwards compatibility
 TICKER = 'NOW'
 
 # External API keys and constants
-ILS_USD_API_URL = 'https://api.exchangerate-api.com/v4/latest/USD'
+# Primary and fallback exchange rate API URLs - using more reliable sources
+EXCHANGE_APIS = [
+    # Best reliability API from frankfurter.app
+    {
+        'url': 'https://api.frankfurter.app/latest?from=USD&to=ILS',
+        'rate_path': ['rates', 'ILS']
+    },
+    # European Central Bank-backed free API
+    {
+        'url': 'https://api.exchangeratesapi.io/latest?base=USD&symbols=ILS',
+        'rate_path': ['rates', 'ILS']
+    },
+    # Currency Freaks API - good alternative
+    {
+        'url': 'https://api.currencyfreaks.com/v2.0/rates/latest?apikey=7b78f8d2222e46b5a50c87c321ea8685',
+        'rate_path': ['rates', 'ILS']
+    },
+    # GitHub CDN-hosted API as final fallback
+    {
+        'url': 'https://cdn.jsdelivr.net/gh/fawazahmed0/currency-api@1/latest/currencies/usd/ils.json',
+        'rate_path': ['ils']
+    }
+]
+
+# Default fallback rate (updated to August 2025 estimate)
+DEFAULT_ILS_USD_RATE = 3.42
 
 # Initialize Firebase (only if not already initialized)
 if not firebase_admin._apps:
@@ -122,24 +329,85 @@ def fetch_historical_sn_prices(days=30):
         print(traceback.format_exc())
         return None
 
+# Cache for exchange rate to ensure consistency between page refreshes
+_exchange_rate_cache = {'rate': 3.42, 'timestamp': None}
+
 def fetch_ils_usd_rate():
-    """Fetch current ILS to USD exchange rate"""
-    try:
-        import requests
-        response = requests.get(ILS_USD_API_URL)
-        data = response.json()
-        
-        # The API returns rates against USD, so we need the ILS rate
-        if 'rates' in data and 'ILS' in data['rates']:
-            return round(data['rates']['ILS'], 4)
-        else:
-            print("WARNING: Could not fetch ILS/USD exchange rate")
-            return None
-    except Exception as e:
-        print(f"ERROR in fetch_ils_usd_rate: {e}")
-        import traceback
-        print(traceback.format_exc())
-        return None
+    """Fetch current ILS to USD exchange rate with caching for consistency and multiple API fallbacks"""
+    global _exchange_rate_cache
+    
+    # If we have a cached rate from today, return it
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    if _exchange_rate_cache['timestamp'] == current_date:
+        print(f"Using cached exchange rate: {_exchange_rate_cache['rate']} from {current_date}")
+        return _exchange_rate_cache['rate']
+    
+    print("No valid cache found. Fetching fresh exchange rate...")
+    import requests
+    import time
+    
+    # Define API-specific handlers to extract the exchange rate
+    # Try each API in order until we get a successful response
+    for api_config in EXCHANGE_APIS:
+        try:
+            print(f"Attempting to fetch exchange rate from {api_config['url']}")
+            
+            # Add User-Agent header to avoid being blocked by some APIs
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            response = requests.get(api_config['url'], headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Navigate to the exchange rate value using the provided path
+                rate_value = data
+                path_found = True
+                for key in api_config['rate_path']:
+                    if rate_value is not None and isinstance(rate_value, dict) and key in rate_value:
+                        rate_value = rate_value.get(key)
+                    else:
+                        print(f"Key '{key}' not found in response data")
+                        path_found = False
+                        break
+                
+                if path_found and rate_value is not None:
+                    # Convert to float if it's a string
+                    if isinstance(rate_value, str):
+                        rate_value = float(rate_value)
+                    
+                    # Special handling for APIs that might return USD/ILS instead of ILS/USD
+                    # If rate is very small (e.g., 0.29 instead of 3.4), it's likely USD/ILS
+                    if rate_value < 1.0:
+                        rate = round(1 / rate_value, 4)
+                        print(f"Converted USD/ILS to ILS/USD: {rate}")
+                    else:
+                        rate = round(rate_value, 4)
+                    
+                    print(f"Successfully fetched ILS/USD rate: {rate}")
+                    
+                    # Verify the rate is reasonable (between 3.0 and 4.0 for USD/ILS in 2025)
+                    if 3.0 <= rate <= 4.0:
+                        # Update the cache
+                        _exchange_rate_cache = {'rate': rate, 'timestamp': current_date}
+                        return rate
+                    else:
+                        print(f"Rate {rate} outside of expected range (3.0-4.0), trying next API")
+                else:
+                    print("Failed to extract rate value from response")
+            else:
+                print(f"API returned non-200 status code: {response.status_code}")
+        except Exception as e:
+            print(f"Error with API {api_config['url']}: {str(e)}")
+            # Continue to the next API on failure
+            time.sleep(0.5)  # Brief pause before trying next API
+    
+    # If all APIs failed, use the most recent known good rate (August 2025)
+    print("WARNING: All exchange rate APIs failed, using default rate")
+    _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
+    return _exchange_rate_cache['rate']
 
 def fetch_historical_ils_usd_rates(days=30):
     """Fetch historical ILS to USD exchange rates for the given number of days"""
@@ -163,6 +431,8 @@ def fetch_historical_ils_usd_rates(days=30):
             
             # Add a random variation of up to ±3% from current rate
             import random
+            # Use a fixed seed based on the date to ensure consistent values between refreshes
+            random.seed(hash(date_str))
             variation = random.uniform(-0.03, 0.03)
             rate = current_rate * (1 + variation)
             
@@ -176,31 +446,66 @@ def fetch_historical_ils_usd_rates(days=30):
         return None
         
 def calculate_sell_profitability(stock_prices, exchange_rates):
-    """Calculate profitability for selling based on stock price and exchange rate"""
+    """Calculate profitability for selling based on stock price and exchange rate using min/max normalization"""
     try:
-        profitability = {}
+        # Extract scalar values to avoid Series truth value ambiguity
+        scalar_stock_values = {}
+        scalar_exchange_rates = {}
         
         # Find common dates between stock prices and exchange rates
-        common_dates = set(stock_prices.keys()) & set(exchange_rates.keys())
+        common_dates = sorted(set(stock_prices.keys()) & set(exchange_rates.keys()))
         
         # Check if we have valid data
         if not common_dates:
             return {}
         
-        # Get baseline values for comparison (first date in our dataset)
-        first_date = sorted(common_dates)[0]
-        baseline_stock = stock_prices[first_date]
-        baseline_rate = exchange_rates[first_date]
-        
-        # Calculate raw profitability scores
+        # Convert to scalar values
         for date in common_dates:
-            # Higher stock price and higher exchange rate (weaker ILS) means better profitability
-            # We multiply by 100 to get a more readable score and add weights
-            stock_component = (stock_prices[date] / baseline_stock - 1) * 100 * 0.7  # 70% weight on stock price
-            rate_component = (exchange_rates[date] / baseline_rate - 1) * 100 * 0.3   # 30% weight on exchange rate
+            try:
+                # Convert to float to ensure we have scalar values
+                scalar_stock_values[date] = float(stock_prices[date])
+                scalar_exchange_rates[date] = float(exchange_rates[date])
+            except (ValueError, TypeError):
+                # Skip dates with invalid values
+                continue
+        
+        # Get valid dates after filtering
+        valid_dates = sorted(set(scalar_stock_values.keys()) & set(scalar_exchange_rates.keys()))
+        if not valid_dates:
+            return {}
+        
+        # Calculate min and max values
+        stock_value_list = list(scalar_stock_values.values())
+        rate_value_list = list(scalar_exchange_rates.values())
+        
+        min_stock = min(stock_value_list)
+        max_stock = max(stock_value_list)
+        stock_range = max_stock - min_stock
+        
+        min_rate = min(rate_value_list)
+        max_rate = max(rate_value_list)
+        rate_range = max_rate - min_rate
+        
+        # Normalize and calculate profitability
+        # For stock: higher price = higher score (direct relationship)
+        # For exchange rate: higher rate = higher score (direct relationship)
+        profitability = {}
+        
+        for date in valid_dates:
+            # Normalize stock price (higher = better)
+            if stock_range > 0:
+                normalized_stock = (scalar_stock_values[date] - min_stock) / stock_range
+            else:
+                normalized_stock = 0.5  # Default if no range
             
-            # Combined score: positive is good, negative is bad (compared to baseline date)
-            profitability[date] = stock_component + rate_component + 50  # Add 50 to shift baseline to midpoint
+            # Normalize exchange rate (higher = better)
+            if rate_range > 0:
+                normalized_rate = (scalar_exchange_rates[date] - min_rate) / rate_range
+            else:
+                normalized_rate = 0.5  # Default if no range
+            
+            # Calculate final score (70% price, 30% exchange rate)
+            profitability[date] = (normalized_stock * 0.7 + normalized_rate * 0.3) * 100
         
         return profitability
     except Exception as e:
@@ -1269,6 +1574,19 @@ def get_recommendation_text(current_profit, best_profit, best_date):
         # Handle None values immediately
         if current_profit is None or best_profit is None:
             return "Insufficient data to make a recommendation at this time."
+        
+        # Convert pandas Series to scalar values if needed
+        if hasattr(current_profit, 'item'):
+            try:
+                current_profit = current_profit.item()
+            except:
+                current_profit = float(current_profit)
+                
+        if hasattr(best_profit, 'item'):
+            try:
+                best_profit = best_profit.item()
+            except:
+                best_profit = float(best_profit)
             
         # Convert string inputs to float if possible
         if isinstance(current_profit, str):
@@ -1333,151 +1651,464 @@ def get_recommendation_text(current_profit, best_profit, best_date):
         print(f"Error generating recommendation: {e}")
         return "Unable to generate a recommendation due to a calculation error."
 
+# Fetch historical ServiceNow stock prices
+def fetch_historical_sn_prices(days=30):
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    
+    try:
+        # Get ServiceNow stock data
+        data = yf.download('NOW', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        
+        # Extract closing prices
+        sn_prices = {}
+        for date, row in data.iterrows():
+            date_str = date.strftime('%Y-%m-%d')
+            sn_prices[date_str] = round(row['Close'], 2)
+            
+        return sn_prices
+    except Exception as e:
+        print(f"Error fetching SN prices: {e}")
+        return {}
+
+# Fetch historical S&P 500 prices
+def fetch_historical_sp_prices(days=30):
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    
+    try:
+        # Get S&P 500 data using yfinance (^GSPC is the ticker for S&P 500)
+        data = yf.download('^GSPC', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        
+        # Extract closing prices
+        sp_prices = {}
+        for date, row in data.iterrows():
+            date_str = date.strftime('%Y-%m-%d')
+            sp_prices[date_str] = round(row['Close'], 2)
+            
+        return sp_prices
+    except Exception as e:
+        print(f"Error fetching S&P 500 prices: {e}")
+        return {}
+
+# Calculate buying profitability for S&P 500
+def calculate_buy_profitability(sp_prices, exchange_rates):
+    """
+    Calculate the profitability of buying S&P 500 based on:
+    1. Lower S&P price = better buying opportunity
+    2. Stronger ILS (lower USD/ILS rate) = better buying power
+    
+    Returns a dictionary of profitability scores by date using min/max normalization
+    """
+    if not sp_prices or not exchange_rates:
+        return {}
+    
+    # Get common dates between S&P prices and exchange rates
+    common_dates = sorted(set(sp_prices.keys()) & set(exchange_rates.keys()))
+    if not common_dates:
+        return {}
+    
+    # Extract scalar values to avoid Series truth value ambiguity
+    # Make sure we're working with primitive float values, not Series or DataFrames
+    scalar_sp_values = {}
+    scalar_exchange_rates = {}
+    
+    for date in common_dates:
+        try:
+            # Convert to float to ensure we have scalar values
+            scalar_sp_values[date] = float(sp_prices[date])
+            scalar_exchange_rates[date] = float(exchange_rates[date])
+        except (ValueError, TypeError):
+            # Skip dates with invalid values
+            continue
+    
+    # Get new common dates after potential filtering
+    valid_dates = sorted(set(scalar_sp_values.keys()) & set(scalar_exchange_rates.keys()))
+    if not valid_dates:
+        return {}
+    
+    # Calculate min and max values
+    sp_value_list = list(scalar_sp_values.values())
+    rate_value_list = list(scalar_exchange_rates.values())
+    
+    min_sp = min(sp_value_list)
+    max_sp = max(sp_value_list)
+    sp_range = max_sp - min_sp
+    
+    min_rate = min(rate_value_list)
+    max_rate = max(rate_value_list)
+    rate_range = max_rate - min_rate
+    
+    # Normalize and calculate profitability
+    # For S&P: lower price = higher score (inverse relationship)
+    # For exchange rate: lower rate = higher score (inverse relationship)
+    profitability = {}
+    
+    for date in valid_dates:
+        # Normalize S&P price (lower = better)
+        if sp_range > 0:
+            normalized_sp = 1 - ((scalar_sp_values[date] - min_sp) / sp_range)  # Inverse: lower price = higher score
+        else:
+            normalized_sp = 0.5  # Default if no range
+        
+        # Normalize exchange rate (lower = better)
+        if rate_range > 0:
+            normalized_rate = 1 - ((scalar_exchange_rates[date] - min_rate) / rate_range)  # Inverse: lower rate = higher score
+        else:
+            normalized_rate = 0.5  # Default if no range
+        
+        # Calculate final score (70% price, 30% exchange rate)
+        profitability[date] = (normalized_sp * 0.7 + normalized_rate * 0.3) * 100
+    
+    return profitability
+
+# Function to get buy recommendation text
+def get_buy_recommendation_text(current_profit, best_profit, best_date):
+    """Generate recommendation text based on buy profitability scores."""
+    try:
+        # Handle None values immediately
+        if current_profit is None or best_profit is None:
+            return "Insufficient data to make a recommendation at this time."
+        
+        # Convert pandas Series to scalar values if needed
+        if hasattr(current_profit, 'item'):
+            try:
+                current_profit = current_profit.item()
+            except:
+                current_profit = float(current_profit)
+                
+        if hasattr(best_profit, 'item'):
+            try:
+                best_profit = best_profit.item()
+            except:
+                best_profit = float(best_profit)
+        
+        # Convert string inputs to float if possible
+        if isinstance(current_profit, str):
+            try:
+                current_profit = float(current_profit)
+            except ValueError:
+                return "Unable to process profitability data."
+                
+        if isinstance(best_profit, str):
+            try:
+                best_profit = float(best_profit)
+            except ValueError:
+                return "Unable to process profitability data."
+        
+        # Safety check for best_date
+        if best_date is None or best_date == 'N/A':
+            best_date = "unknown date"
+            
+        # Calculate the difference without formatting
+        try:
+            profit_gap = best_profit - current_profit
+        except Exception:
+            profit_gap = 0
+            
+        # Generate recommendations based on buying score
+        if current_profit >= 80:
+            return '<span class="action-strong">STRONG BUY RECOMMENDATION</span>: Current buying opportunity score is excellent (80+ score). Market conditions strongly favor buying NOW based on both S&P price and USD/ILS exchange rate.'
+            
+        elif current_profit >= 70:
+            return '<span class="action-strong">BUY RECOMMENDATION</span>: Current buying opportunity is very good (70+ score). Consider buying now as conditions are favorable for both S&P price and exchange rate.'
+            
+        elif current_profit >= 60:
+            if profit_gap < 10:
+                return '<span class="action-strong">CONSIDER BUYING</span>: Current buying opportunity is good (60+ score) and close to the optimal buying point. Buying now would capture most of the potential value.'
+            else:
+                msg = '<span class="action-strong">WAIT WITH CAUTION</span>: Current buying opportunity is good (60+ score), but significantly better conditions may occur.'
+                msg += ' The best buying day appears to be ' + str(best_date)
+                try:
+                    msg += ' with a ' + str(int(best_profit)) + ' score.'
+                except:
+                    msg += '.'
+                return msg
+        
+        elif current_profit >= 50:
+            msg = '<span class="action-strong">WAIT</span>: Current buying opportunity is moderate (50+ score).'
+            msg += ' Better conditions are likely on ' + str(best_date)
+            try:
+                msg += ' with a ' + str(int(best_profit)) + ' score.'
+            except:
+                msg += '.'
+            return msg
+            
+        elif current_profit >= 40:
+            return '<span class="action-strong">WAIT FOR BETTER CONDITIONS</span>: Current buying opportunity is below average (40+ score). Waiting for better market conditions is recommended.'
+            
+        elif current_profit >= 30:
+            return '<span class="action-strong">NOT RECOMMENDED</span>: Current buying opportunity is poor (30+ score). S&P price is too high or USD/ILS exchange rate is unfavorable. Consider waiting for a significant market correction.'
+            
+        else:
+            return '<span class="action-strong">AVOID BUYING</span>: Current buying opportunity is very poor. Market conditions are highly unfavorable for buying S&P 500 with ILS at this time.'
+    except Exception as e:
+        return f"Unable to generate recommendation due to an error: {e}"
+
 # Route for the best to sell SN page
 @app.route('/best-to-sell')
 def best_to_sell():
-    # Fetch historical data
-    stock_prices = fetch_historical_sn_prices(30)
-    exchange_rates = fetch_historical_ils_usd_rates(30)
+    # Get the timeframe parameter from query string, default to 30 days
+    timeframe = request.args.get('timeframe', '30')
+    # Convert to integer and validate (default to 30 if invalid)
+    try:
+        days = int(timeframe)
+        if days not in [30, 60, 90]:
+            days = 30
+    except ValueError:
+        days = 30
+    
+    # Fetch historical data with the specified timeframe
+    stock_prices = fetch_historical_sn_prices(days)
+    exchange_rates = fetch_historical_ils_usd_rates(days)
     
     profitability = calculate_sell_profitability(stock_prices, exchange_rates)
     
-    # Find common dates across all datasets
+    # Get common dates between stock prices and exchange rates
     common_dates = sorted(set(stock_prices.keys()) & set(exchange_rates.keys()) & set(profitability.keys()))
     
-    # Normalize profitability for better visualization
-    if common_dates and profitability:
-        # Find min/max values for normalization to 0-100 range
-        min_profit = min(profitability.values())
-        max_profit = max(profitability.values())
-        profit_range = max_profit - min_profit if max_profit > min_profit else 1
+    # Initialize variables with default values
+    current_profit = None
+    current_price = None
+    current_rate = None
+    best_profit = None
+    best_date = None
+    
+    if common_dates:
+        # Get current dates/values
+        current_date = common_dates[-1]  # Last date is the current date
+        current_profit = profitability.get(current_date)
+        current_price = stock_prices.get(current_date)
+        current_rate = exchange_rates.get(current_date)
         
-        normalized_profit = {}
+        # Find the best day to sell (highest profitability score)
+        # Ensure we're working with scalar values, not Series
+        profit_values = []
         for date in common_dates:
-            normalized_profit[date] = round((profitability[date] - min_profit) * 100 / profit_range, 2)
-    else:
-        common_dates = []
-        normalized_profit = {}
-        profitability = {}
-    
-    # Prepare JSON data for chart and stats
-    dates_json = json.dumps(common_dates)
-    profitability_json = json.dumps([normalized_profit.get(date, None) for date in common_dates])
-    stock_prices_json = json.dumps([stock_prices.get(date, None) for date in common_dates])
-    exchange_rates_json = json.dumps([exchange_rates.get(date, None) for date in common_dates])
-    
-    # Get current and best profitability stats
-    current_date = common_dates[-1] if common_dates else None
-    current_profit = normalized_profit.get(current_date) if current_date else None
-    current_stock = stock_prices.get(current_date) if current_date else None
-    current_rate = exchange_rates.get(current_date) if current_date else None
-    
-    # Get best day to sell (highest profitability)
-    if normalized_profit:
-        best_profit_pair = max(normalized_profit.items(), key=lambda x: x[1])
-        best_date = best_profit_pair[0]
-        best_profit = best_profit_pair[1]
-    else:
-        best_date = None
-        best_profit = None
+            try:
+                value = profitability[date]
+                # If it's a pandas Series, convert to scalar
+                if hasattr(value, 'item'):
+                    profit_values.append(value.item())
+                else:
+                    profit_values.append(float(value))
+            except (ValueError, TypeError):
+                continue
+                
+        if profit_values:
+            best_profit = max(profit_values)
+            
+            # Find all dates with the best profitability score
+            # Find all dates with the best profitability score - properly handle Series comparison
+            best_dates = []
+            for date in common_dates:
+                try:
+                    value = profitability[date]
+                    # Convert to scalar if it's a Series
+                    if hasattr(value, 'item'):
+                        scalar_value = value.item()
+                    else:
+                        scalar_value = float(value)
+                        
+                    # Compare scalar values
+                    if abs(scalar_value - best_profit) < 0.0001:  # Use small epsilon for float comparison
+                        best_dates.append(date)
+                except (ValueError, TypeError):
+                    continue
+            if best_dates:
+                best_date = best_dates[0]
+                
+        # Ensure we're working with scalar values for string formatting
+        try:
+            current_profit_scalar = float(current_profit) if current_profit is not None else None
+        except (TypeError, ValueError):
+            current_profit_scalar = None
+            
+        try:
+            best_profit_scalar = float(best_profit) if best_profit is not None else None
+        except (TypeError, ValueError):
+            best_profit_scalar = None
+            
+        try:
+            current_price_scalar = float(current_price) if current_price is not None else None
+        except (TypeError, ValueError):
+            current_price_scalar = None
+            
+        try:
+            current_rate_scalar = float(current_rate) if current_rate is not None else None
+        except (TypeError, ValueError):
+            current_rate_scalar = None
         
-    # Safe formatting for template display - avoiding any f-strings
-    formatted_current_profit = 'N/A'
-    formatted_best_profit = 'N/A'
-    formatted_best_date = 'N/A'
-    formatted_current_stock = 'N/A'
-    formatted_current_rate = 'N/A'
-    
-    if isinstance(current_profit, (int, float)):
-        try:
-            formatted_current_profit = str(int(current_profit))
-        except:
-            pass
-    
-    if isinstance(best_profit, (int, float)):
-        try:
-            formatted_best_profit = str(int(best_profit))
-        except:
-            pass
-    
-    if best_date is not None:
-        formatted_best_date = str(best_date)
-    
-    if isinstance(current_stock, (int, float)):
-        try:
-            formatted_current_stock = str(int(current_stock * 100) / 100)
-        except:
-            pass
-    
-    if isinstance(current_rate, (int, float)):
-        try:
-            formatted_current_rate = str(int(current_rate * 100) / 100)
-        except:
-            pass
-    
-    # Prepare recommendation text without any format specifiers
-    recommendation_text = 'Unable to generate recommendation with the current data.'
-    try:
+        # Format values for display
+        formatted_current_profit = f"{current_profit_scalar:.1f}" if current_profit_scalar is not None else "N/A"
+        formatted_best_profit = f"{best_profit_scalar:.1f}" if best_profit_scalar is not None else "N/A"
+        formatted_best_date = best_date if best_date else "N/A"
+        formatted_current_stock = f"{current_price_scalar:.2f}" if current_price_scalar is not None else "N/A"
+        formatted_current_rate = f"{current_rate_scalar:.2f}" if current_rate_scalar is not None else "N/A"
+        
+        # Get recommendation text
         recommendation_text = get_recommendation_text(current_profit, best_profit, best_date)
-    except Exception as e:
-        print("Error getting recommendation: " + str(e))
-        recommendation_text = 'Unable to generate recommendation due to an error.'
+        
+        # Use the prepare_template_data function to safely handle all data serialization
+        context = prepare_template_data(
+            common_dates=common_dates, 
+            profitability=profitability, 
+            prices=stock_prices, 
+            rates=exchange_rates, 
+            current_profit=current_profit,
+            best_profit=best_profit, 
+            best_date=best_date, 
+            current_price=current_price, 
+            current_rate=current_rate
+        )
+        # Add recommendation text to context
+        context['recommendation_text'] = recommendation_text
+    else:
+        # Use empty data template
+        context = prepare_template_data([], {}, {}, {})
+        context['recommendation_text'] = "Insufficient data to make a recommendation."
     
-    # Ensure all required variables for template are defined
-    dates_json = json.dumps(common_dates)
-    margin = ''
+    # Add score explanation data for tooltips
+    context['score_explanation'] = get_sell_score_explanation()
     
-    # Note: HTML template has been moved to templates/best_to_sell.html
-    # Create a template context dictionary with all our variables
-    template_context = {
-        'dates_json': dates_json,
-        'profitability_json': profitability_json,
-        'stock_prices_json': stock_prices_json,
-        'exchange_rates_json': exchange_rates_json,
-        'recommendation_text': recommendation_text,
-        'formatted_current_profit': formatted_current_profit,
-        'formatted_best_date': formatted_best_date,
-        'formatted_best_profit': formatted_best_profit,
-        'formatted_current_stock': formatted_current_stock,
-        'formatted_current_rate': formatted_current_rate,
-        'common_dates': common_dates  # Add this in case it's used in template conditions
-    }
+    # Add timeframe to context
+    context['timeframe'] = days
     
-    # Render the template file with the context dictionary
-    return render_template('best_to_sell.html', **template_context)
+    # Render the template with context
+    return render_template('best_to_sell_new.html', **context)
 
 # Route for the best to buy S&P page
 @app.route('/best-to-buy-sp')
 def best_to_buy_sp():
-    html = '''
-    <style>
-    body { background: #f6f8fa; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 0; }
-    .container { max-width: 520px; margin: 40px auto; background: #fff; border-radius: 16px; box-shadow: 0 2px 16px #0002; padding: 32px 24px; text-align: center; }
-    /* Tab navigation */
-    .tabs { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
-    .tab { flex: 1; padding: 10px 5px; text-align: center; cursor: pointer; color: #555; font-weight: 500; transition: all 0.3s ease; border-bottom: 3px solid transparent; }
-    .tab.active { color: #1976d2; border-bottom: 3px solid #1976d2; }
-    .tab:hover:not(.active) { color: #333; background-color: #f1f1f1; }
-    /* Empty state */
-    .empty-state { margin: 50px 0; padding: 30px; text-align: center; }
-    .empty-state h3 { color: #555; margin-bottom: 10px; }
-    .empty-state p { color: #777; margin-bottom: 20px; }
-    </style>
-    <div class="container">
-      <div class="tabs">
-        <a href="/" class="tab">SN Monitor</a>
-        <a href="/best-to-sell" class="tab">Best to Sell</a>
-        <a href="/best-to-buy-sp" class="tab active">Buy S&P</a>
-        <a href="/best-to-shift" class="tab">Shift to S&P</a>
-      </div>
-      <h2>Best Time to Buy S&P</h2>
-      <div class="empty-state">
-        <h3>Coming soon to theaters...</h3>
-        <p>This feature is under development and will be available soon.</p>
-      </div>
-    </div>
-    '''
-    return render_template_string(html)
+    # Get the timeframe parameter from query string, default to 30 days
+    timeframe = request.args.get('timeframe', '30')
+    # Convert to integer and validate (default to 30 if invalid)
+    try:
+        days = int(timeframe)
+        if days not in [30, 60, 90]:
+            days = 30
+    except ValueError:
+        days = 30
+        
+    # Fetch historical data with the specified timeframe
+    sp_prices = fetch_historical_sp_prices(days)
+    exchange_rates = fetch_historical_ils_usd_rates(days)
+    
+    # Calculate profitability for buying S&P
+    profitability = calculate_buy_profitability(sp_prices, exchange_rates)
+    
+    # Get common dates between stock prices and exchange rates
+    common_dates = sorted(set(sp_prices.keys()) & set(exchange_rates.keys()) & set(profitability.keys()))
+    
+    # Initialize variables with default values
+    current_profit = None
+    current_price = None
+    current_rate = None
+    best_profit = None
+    best_date = None
+    
+    if common_dates:
+        # Get current dates/values
+        current_date = common_dates[-1]  # Last date is the current date
+        current_profit = profitability.get(current_date)
+        current_price = sp_prices.get(current_date)
+        current_rate = exchange_rates.get(current_date)
+        
+        # Find the best day to buy (highest profitability score)
+        # Ensure we're working with scalar values, not Series
+        profit_values = []
+        for date in common_dates:
+            try:
+                value = profitability[date]
+                # If it's a pandas Series, convert to scalar
+                if hasattr(value, 'item'):
+                    profit_values.append(value.item())
+                else:
+                    profit_values.append(float(value))
+            except (ValueError, TypeError):
+                continue
+                
+        if profit_values:
+            best_profit = max(profit_values)
+            
+            # Find all dates with the best profitability score
+            # Find all dates with the best profitability score - properly handle Series comparison
+            best_dates = []
+            for date in common_dates:
+                try:
+                    value = profitability[date]
+                    # Convert to scalar if it's a Series
+                    if hasattr(value, 'item'):
+                        scalar_value = value.item()
+                    else:
+                        scalar_value = float(value)
+                        
+                    # Compare scalar values
+                    if abs(scalar_value - best_profit) < 0.0001:  # Use small epsilon for float comparison
+                        best_dates.append(date)
+                except (ValueError, TypeError):
+                    continue
+            if best_dates:
+                best_date = best_dates[0]
+                
+        # Ensure we're working with scalar values for string formatting
+        try:
+            current_profit_scalar = float(current_profit) if current_profit is not None else None
+        except (TypeError, ValueError):
+            current_profit_scalar = None
+            
+        try:
+            best_profit_scalar = float(best_profit) if best_profit is not None else None
+        except (TypeError, ValueError):
+            best_profit_scalar = None
+            
+        try:
+            current_price_scalar = float(current_price) if current_price is not None else None
+        except (TypeError, ValueError):
+            current_price_scalar = None
+            
+        try:
+            current_rate_scalar = float(current_rate) if current_rate is not None else None
+        except (TypeError, ValueError):
+            current_rate_scalar = None
+        
+        # Format values for display
+        formatted_current_profit = f"{current_profit_scalar:.1f}" if current_profit_scalar is not None else "N/A"
+        formatted_best_profit = f"{best_profit_scalar:.1f}" if best_profit_scalar is not None else "N/A"
+        formatted_best_date = best_date if best_date else "N/A"
+        formatted_current_stock = f"{current_price_scalar:.2f}" if current_price_scalar is not None else "N/A"
+        formatted_current_rate = f"{current_rate_scalar:.2f}" if current_rate_scalar is not None else "N/A"
+        
+        # Get recommendation text
+        recommendation_text = get_buy_recommendation_text(current_profit, best_profit, best_date)
+        
+        # Use the prepare_template_data function to safely handle all data serialization
+        context = prepare_template_data(
+            common_dates=common_dates, 
+            profitability=profitability, 
+            prices=sp_prices,  # Note: using sp_prices instead of stock_prices for this route
+            rates=exchange_rates, 
+            current_profit=current_profit,
+            best_profit=best_profit, 
+            best_date=best_date, 
+            current_price=current_price, 
+            current_rate=current_rate
+        )
+        # Add recommendation text to context
+        context['recommendation_text'] = recommendation_text
+    else:
+        # Use empty data template
+        context = prepare_template_data([], {}, {}, {})
+        context['recommendation_text'] = "Insufficient data to make a recommendation."
+    
+    # Add score explanation data for tooltips
+    context['score_explanation'] = get_buy_score_explanation()
+    
+    # Add timeframe to context
+    context['timeframe'] = days
+
+    # Render template with context data
+    return render_template('best_to_buy_sp.html', **context)
 
 # Route for the best to shift SN to S&P page
 @app.route('/best-to-shift')
@@ -1512,8 +2143,14 @@ def best_to_shift():
     '''
     return render_template_string(html)
 
-if __name__ == '__main__':
-    # Debug environment variables
+if __name__ == "__main__":
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='ServiceNow Stock Monitor')
+    parser.add_argument('--port', type=int, default=None, help='Port number for Flask app')
+    args = parser.parse_args()
+    
     print("--- Environment Information ---")
     print(f"ENVIRONMENT: {os.environ.get('ENVIRONMENT')}")
     print(f"RENDER: {os.environ.get('RENDER')}")
@@ -1522,8 +2159,8 @@ if __name__ == '__main__':
     print(f"FIREBASE_SERVICE_ACCOUNT_JSON present: {bool(os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON'))}")
     print("-----------------------------")
     
-    # Get port from environment variable for cloud deployment
-    port = int(os.environ.get('PORT', 5001))
+    # Get port from command line args or environment variable for cloud deployment
+    port = args.port if args.port else int(os.environ.get('PORT', 5001))
     
     # Only send email if not in production (to avoid spamming)
     if os.environ.get('ENVIRONMENT') != 'production':
