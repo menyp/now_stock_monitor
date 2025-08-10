@@ -321,7 +321,7 @@
                     labels: dates,
                     datasets: [
                         {
-                            label: 'Profitability Score',
+                            label: 'Profitability Score (Blue)',
                             data: profitabilityData,
                             backgroundColor: 'rgba(54, 162, 235, 0.2)',
                             borderColor: 'rgba(54, 162, 235, 1)',
@@ -350,7 +350,7 @@
                             },
                         },
                         {
-                            label: 'NOW Stock Price',
+                            label: 'NOW Stock Price (Red)',
                             data: stockPricesData,
                             backgroundColor: 'rgba(255, 99, 132, 0.0)',
                             borderColor: 'rgba(255, 99, 132, 1)',
@@ -359,7 +359,7 @@
                             yAxisID: 'y1'
                         },
                         {
-                            label: 'USD/ILS Rate',
+                            label: 'USD/ILS Rate (Teal)',
                             data: exchangeRatesData,
                             backgroundColor: 'rgba(75, 192, 192, 0.0)',
                             borderColor: 'rgba(75, 192, 192, 1)',
@@ -386,7 +386,7 @@
                                     }
                                     
                                     if (context.datasetIndex === 0) {
-                                        return label + '$' + String(context.parsed.y);
+                                        return label + String(context.parsed.y);
                                     } else if (context.datasetIndex === 1) {
                                         return label + String(context.parsed.y);
                                     } else {
