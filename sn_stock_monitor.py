@@ -1826,11 +1826,16 @@ def best_to_sell():
     best_profit = None
     best_date = None
     
+    # Explicitly fetch the latest stock price
+    latest_price = fetch_sn_price()
+    
     if common_dates:
         # Get current dates/values
         current_date = common_dates[-1]  # Last date is the current date
         current_profit = profitability.get(current_date)
-        current_price = stock_prices.get(current_date)
+        
+        # Use the explicitly fetched price instead of historical data
+        current_price = latest_price if latest_price is not None else stock_prices.get(current_date)
         
         # Force current rate to be exactly DEFAULT_ILS_USD_RATE (3.42) for consistency
         current_rate = DEFAULT_ILS_USD_RATE
