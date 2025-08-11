@@ -372,6 +372,8 @@ def fetch_historical_ils_usd_rates(days=30):
         result = {}
         today = datetime.now().strftime('%Y-%m-%d')
         
+        # Make sure we include today's date in the result
+        # We'll generate data for days+1 to ensure we have today's data
         for i in range(days, -1, -1):
             date = datetime.now() - timedelta(days=i)
             date_str = date.strftime('%Y-%m-%d')
@@ -389,6 +391,10 @@ def fetch_historical_ils_usd_rates(days=30):
             rate = DEFAULT_ILS_USD_RATE * (1 + variation)
             
             result[date_str] = round(rate, 4)
+        
+        # Explicitly ensure today's date is in the result
+        if today not in result:
+            result[today] = DEFAULT_ILS_USD_RATE
             
         return result
     except Exception as e:
@@ -1605,7 +1611,8 @@ def get_recommendation_text(current_profit, best_profit, best_date):
 
 # Fetch historical ServiceNow stock prices
 def fetch_historical_sn_prices(days=30):
-    end_date = datetime.now()
+    # Add one day to ensure we include today's data
+    end_date = datetime.now() + timedelta(days=1)
     start_date = end_date - timedelta(days=days)
     
     try:
@@ -1617,6 +1624,13 @@ def fetch_historical_sn_prices(days=30):
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
             sn_prices[date_str] = round(row['Close'], 2)
+        
+        # Force include today's price
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        if today_str not in sn_prices:
+            current_price = fetch_sn_price()
+            if current_price is not None:
+                sn_prices[today_str] = current_price
             
         return sn_prices
     except Exception as e:
@@ -1625,7 +1639,8 @@ def fetch_historical_sn_prices(days=30):
 
 # Fetch historical S&P 500 prices
 def fetch_historical_sp_prices(days=30):
-    end_date = datetime.now()
+    # Add one day to ensure we include today's data
+    end_date = datetime.now() + timedelta(days=1)
     start_date = end_date - timedelta(days=days)
     
     try:
@@ -1637,6 +1652,17 @@ def fetch_historical_sp_prices(days=30):
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
             sp_prices[date_str] = round(row['Close'], 2)
+        
+        # Force include today's price if available
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        if today_str not in sp_prices:
+            try:
+                ticker = yf.Ticker('^GSPC')
+                current_data = ticker.history(period='1d')
+                if not current_data.empty:
+                    sp_prices[today_str] = round(float(current_data['Close'].iloc[-1]), 2)
+            except Exception as e:
+                print(f"Error fetching today's S&P 500 price: {e}")
             
         return sp_prices
     except Exception as e:
