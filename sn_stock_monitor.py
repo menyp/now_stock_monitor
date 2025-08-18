@@ -1947,6 +1947,15 @@ def best_to_sell():
     
     # Get common dates between stock prices and exchange rates
     common_dates = sorted(set(stock_prices.keys()) & set(exchange_rates.keys()) & set(profitability.keys()))
+
+    # Handle cases where data fetching might fail and return empty lists
+    if not stock_prices or not exchange_rates or not common_dates:
+        # Prepare a context with an error message
+        context = prepare_template_data([], {}, {}, {})
+        context['recommendation_text'] = "Could not retrieve market data. The service may be temporarily unavailable. Please try again later."
+        context['score_explanation'] = get_sell_score_explanation()
+        context['timeframe'] = days
+        return render_template('best_to_sell_fixed.html', **context)
     
     # Initialize variables with default values
     current_profit = None
