@@ -237,49 +237,39 @@ DEFAULT_ILS_USD_RATE = 3.42
 
 # Initialize Firebase (only if not already initialized)
 if not firebase_admin._apps:
-    # Check if we're running on Render (production)
-    if os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true':
-        # In production, use environment variables
-        # You'll need to set these in your Render dashboard
-        try:
-            # Get the service account JSON from environment variable and save to temp file
-            if 'FIREBASE_SERVICE_ACCOUNT_JSON' in os.environ:
-                print("INFO: Found Firebase service account JSON in environment variables")
-                service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
-                # Create a temporary file to store the service account JSON
-                fd, path = tempfile.mkstemp()
-                try:
-                    with os.fdopen(fd, 'w') as tmp:
-                        tmp.write(service_account_json)
-                    print(f"INFO: Temporary service account file created: {path}")
-                    # Initialize Firebase with the temporary file
-                    cred = credentials.Certificate(path)
-                    firebase_admin.initialize_app(cred, {
-                        'databaseURL': os.environ.get('FIREBASE_DATABASE_URL')
-                    })
-                    print(f"INFO: Firebase initialized in production with database URL: {os.environ.get('FIREBASE_DATABASE_URL')}")
-                finally:
-                    # Clean up the temporary file
-                    os.remove(path)
+    is_production = os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true'
+    
+    try:
+        if is_production:
+            print("INFO: Production environment detected. Attempting to initialize Firebase from environment variables.")
+            service_account_json_str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+            database_url = os.environ.get('FIREBASE_DATABASE_URL')
+
+            if not service_account_json_str:
+                print("CRITICAL: FIREBASE_SERVICE_ACCOUNT_JSON environment variable not found. Firebase will not be used.")
+            elif not database_url:
+                print("CRITICAL: FIREBASE_DATABASE_URL environment variable not found. Firebase will not be used.")
             else:
-                print("CRITICAL: Firebase service account JSON not found in environment variables")
-        except Exception as e:
-            print(f"CRITICAL: Error initializing Firebase in production: {e}")
-            import traceback
-            print(traceback.format_exc())
-    else:
-        # In development, use a local service account file if it exists
-        try:
+                service_account_info = json.loads(service_account_json_str)
+                cred = credentials.Certificate(service_account_info)
+                firebase_admin.initialize_app(cred, {'databaseURL': database_url})
+                print(f"INFO: Firebase initialized successfully for production with database URL: {database_url}")
+        else:
+            print("INFO: Development environment detected. Looking for local Firebase service account file.")
             service_account_path = 'sn-stock-monitor-firebase-adminsdk-fbsvc-5f171ce112.json'
+            database_url = 'https://sn-stock-monitor-default-rtdb.europe-west1.firebasedatabase.app/'
+            
             if os.path.exists(service_account_path):
                 cred = credentials.Certificate(service_account_path)
-                firebase_admin.initialize_app(cred, {
-                    'databaseURL': 'https://sn-stock-monitor-default-rtdb.europe-west1.firebasedatabase.app/'
-                })
+                firebase_admin.initialize_app(cred, {'databaseURL': database_url})
+                print(f"INFO: Firebase initialized successfully for development with database URL: {database_url}")
             else:
-                print(f"WARNING: Firebase service account file not found at {service_account_path}")
-        except Exception as e:
-            print(f"Error initializing Firebase in development: {e}")
+                print(f"WARNING: Firebase service account file not found at '{service_account_path}'. Firebase will not be used.")
+
+    except Exception as e:
+        print(f"CRITICAL: An unexpected error occurred during Firebase initialization: {e}")
+        import traceback
+        print(traceback.format_exc())
 
 
 def get_current_month():
@@ -674,13 +664,21 @@ def notify_peak(price, is_simulation=False):
         logging.error(f"[ALERT] Email notification process failed: {e}")
 
 def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
+    print("--- monitor_stock started ---")
     try:
+        print("Calling load_data()...")
         data = load_data()
+        print(f"load_data() returned: {data is not None}")
+        
         today = get_today()
+        print(f"Today is: {today}")
+
+        print("Calling fetch_sn_price()...")
         current_price = fetch_sn_price()
+        print(f"fetch_sn_price() returned: {current_price}")
         
         if current_price is None:
-            print("Could not fetch SN price.")
+            print("Could not fetch SN price, exiting monitor_stock.")
             return
     except Exception as e:
         print(f"Error initializing monitor_stock: {e}")
