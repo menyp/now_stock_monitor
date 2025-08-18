@@ -235,43 +235,51 @@ EXCHANGE_APIS = [
 # Default fallback rate (updated to August 2025 estimate)
 DEFAULT_ILS_USD_RATE = 3.42
 
-# Initialize Firebase only if explicitly enabled
-if os.environ.get('USE_FIREBASE') == 'true' and not firebase_admin._apps:
-    is_production = os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true'
-    
-    try:
-        if is_production:
-            print("INFO: Production environment detected. Attempting to initialize Firebase from environment variables.")
-            service_account_json_str = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
-            database_url = os.environ.get('FIREBASE_DATABASE_URL')
-
-            if not service_account_json_str:
-                print("CRITICAL: FIREBASE_SERVICE_ACCOUNT_JSON environment variable not found. Firebase will not be used.")
-            elif not database_url:
-                print("CRITICAL: FIREBASE_DATABASE_URL environment variable not found. Firebase will not be used.")
+# Initialize Firebase (only if not already initialized)
+if not firebase_admin._apps:
+    # Check if we're running on Render (production)
+    if os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true':
+        # In production, use environment variables
+        # You'll need to set these in your Render dashboard
+        try:
+            # Get the service account JSON from environment variable and save to temp file
+            if 'FIREBASE_SERVICE_ACCOUNT_JSON' in os.environ:
+                print("INFO: Found Firebase service account JSON in environment variables")
+                service_account_json = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+                # Create a temporary file to store the service account JSON
+                fd, path = tempfile.mkstemp()
+                try:
+                    with os.fdopen(fd, 'w') as tmp:
+                        tmp.write(service_account_json)
+                    print(f"INFO: Temporary service account file created: {path}")
+                    # Initialize Firebase with the temporary file
+                    cred = credentials.Certificate(path)
+                    firebase_admin.initialize_app(cred, {
+                        'databaseURL': os.environ.get('FIREBASE_DATABASE_URL')
+                    })
+                    print(f"INFO: Firebase initialized in production with database URL: {os.environ.get('FIREBASE_DATABASE_URL')}")
+                finally:
+                    # Clean up the temporary file
+                    os.remove(path)
             else:
-                service_account_info = json.loads(service_account_json_str)
-                cred = credentials.Certificate(service_account_info)
-                firebase_admin.initialize_app(cred, {'databaseURL': database_url})
-                print(f"INFO: Firebase initialized successfully for production with database URL: {database_url}")
-        else:
-            print("INFO: Development environment detected. Looking for local Firebase service account file.")
+                print("CRITICAL: Firebase service account JSON not found in environment variables")
+        except Exception as e:
+            print(f"CRITICAL: Error initializing Firebase in production: {e}")
+            import traceback
+            print(traceback.format_exc())
+    else:
+        # In development, use a local service account file if it exists
+        try:
             service_account_path = 'sn-stock-monitor-firebase-adminsdk-fbsvc-5f171ce112.json'
-            database_url = 'https://sn-stock-monitor-default-rtdb.europe-west1.firebasedatabase.app/'
-            
             if os.path.exists(service_account_path):
                 cred = credentials.Certificate(service_account_path)
-                firebase_admin.initialize_app(cred, {'databaseURL': database_url})
-                print(f"INFO: Firebase initialized successfully for development with database URL: {database_url}")
+                firebase_admin.initialize_app(cred, {
+                    'databaseURL': 'https://sn-stock-monitor-default-rtdb.europe-west1.firebasedatabase.app/'
+                })
             else:
-                print(f"WARNING: Firebase service account file not found at '{service_account_path}'. Firebase will not be used.")
-
-    except Exception as e:
-        print(f"CRITICAL: An unexpected error occurred during Firebase initialization: {e}")
-        import traceback
-        print(traceback.format_exc())
-else:
-    print("INFO: USE_FIREBASE is not set to 'true'. Firebase will not be used.")
+                print(f"WARNING: Firebase service account file not found at {service_account_path}")
+        except Exception as e:
+            print(f"Error initializing Firebase in development: {e}")
 
 
 def get_current_month():
@@ -283,34 +291,21 @@ def get_today():
 
 def fetch_sn_price():
     try:
-        print(f"Fetching stock price for {TICKER}")
         ticker = yf.Ticker(TICKER)
-        
-        # Try to get recent data with 1-minute interval
-        print("Attempting to fetch 1-minute interval data...")
+        # Try to get recent data
         data = ticker.history(period='1d', interval='1m')
-        print(f"1-minute data fetch result:\n{data}")
-
+        
         # If no data in 1m interval, try 1d interval
         if data.empty:
             print("No minute data available, trying daily data...")
             data = ticker.history(period='1d')
-            print(f"Daily data fetch result:\n{data}")
-
-        # As a final fallback, try yf.download
+            
         if data.empty:
-            print("Daily data fetch failed, trying yf.download()...")
-            data = yf.download(TICKER, period='1d')
-            print(f"yf.download() result:\n{data}")
-
-        if data.empty:
-            print("WARNING: Could not fetch stock data after all attempts.")
+            print("WARNING: Could not fetch stock data")
             return None
             
         # Get the latest available close price and round to 2 decimal places
-        price = round(float(data['Close'].iloc[-1]), 2)
-        print(f"Successfully fetched price: {price}")
-        return price
+        return round(float(data['Close'].iloc[-1]), 2)
     except Exception as e:
         print(f"ERROR in fetch_sn_price: {e}")
         import traceback
@@ -666,21 +661,13 @@ def notify_peak(price, is_simulation=False):
         logging.error(f"[ALERT] Email notification process failed: {e}")
 
 def monitor_stock(window_start=None, window_end=None, manual_refresh=False):
-    print("--- monitor_stock started ---")
     try:
-        print("Calling load_data()...")
         data = load_data()
-        print(f"load_data() returned: {data is not None}")
-        
         today = get_today()
-        print(f"Today is: {today}")
-
-        print("Calling fetch_sn_price()...")
         current_price = fetch_sn_price()
-        print(f"fetch_sn_price() returned: {current_price}")
         
         if current_price is None:
-            print("Could not fetch SN price, exiting monitor_stock.")
+            print("Could not fetch SN price.")
             return
     except Exception as e:
         print(f"Error initializing monitor_stock: {e}")
@@ -2325,7 +2312,6 @@ if __name__ == "__main__":
     # Start the scheduler in a background thread
     scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
     scheduler_thread.start()
-
+    
     # Start the Flask web server - bind to 0.0.0.0 for cloud deployment
-    # use_reloader=False is important to run in a non-main thread
-    app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true', use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true')
