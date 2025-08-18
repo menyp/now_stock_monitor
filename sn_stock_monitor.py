@@ -291,21 +291,34 @@ def get_today():
 
 def fetch_sn_price():
     try:
+        print(f"Fetching stock price for {TICKER}")
         ticker = yf.Ticker(TICKER)
-        # Try to get recent data
-        data = ticker.history(period='1d', interval='1m')
         
+        # Try to get recent data with 1-minute interval
+        print("Attempting to fetch 1-minute interval data...")
+        data = ticker.history(period='1d', interval='1m')
+        print(f"1-minute data fetch result:\n{data}")
+
         # If no data in 1m interval, try 1d interval
         if data.empty:
             print("No minute data available, trying daily data...")
             data = ticker.history(period='1d')
-            
+            print(f"Daily data fetch result:\n{data}")
+
+        # As a final fallback, try yf.download
         if data.empty:
-            print("WARNING: Could not fetch stock data")
+            print("Daily data fetch failed, trying yf.download()...")
+            data = yf.download(TICKER, period='1d')
+            print(f"yf.download() result:\n{data}")
+
+        if data.empty:
+            print("WARNING: Could not fetch stock data after all attempts.")
             return None
             
         # Get the latest available close price and round to 2 decimal places
-        return round(float(data['Close'].iloc[-1]), 2)
+        price = round(float(data['Close'].iloc[-1]), 2)
+        print(f"Successfully fetched price: {price}")
+        return price
     except Exception as e:
         print(f"ERROR in fetch_sn_price: {e}")
         import traceback
