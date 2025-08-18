@@ -1,5 +1,7 @@
 pandas
-yfinance
+yfinance==0.2.37
+firebase-admin
+openpyxl==3.1.2
 matplotlib
 seaborn
 Flask

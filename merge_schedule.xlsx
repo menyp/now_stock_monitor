@@ -1,0 +1,134 @@
+PK    !             [Content_Types].xml<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>PK    !             _rels/.rels<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>PK    !             xl/workbook.xml<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Merge Schedule" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>PK    !             xl/worksheets/sheet1.xml<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1" t="s"><v>Merge #</v></c>
+      <c r="B1" t="s"><v>Sprint Range</v></c>
+      <c r="C1" t="s"><v>Sprint Start</v></c>
+      <c r="D1" t="s"><v>Sprint End</v></c>
+      <c r="E1" t="s"><v>Merge Date</v></c>
+      <c r="F1" t="s"><v>Clean Track Check Date</v></c>
+      <c r="G1" t="s"><v>Clean Track Status</v></c>
+      <c r="H1" t="s"><v>Comments</v></c>
+    </row>
+    <row r="2">
+      <c r="A2" t="n"><v>1</v></c>
+      <c r="B2" t="s"><v>1–2</v></c>
+      <c r="C2"><v>44758</v></c>
+      <c r="D2"><v>44785</v></c>
+      <c r="E2"><v>44785</v></c>
+      <c r="F2"><v>44781</v></c>
+      <c r="G2" t="s"><v></v></c>
+      <c r="H2" t="s"><v></v></c>
+    </row>
+    <row r="3">
+      <c r="A3" t="n"><v>2</v></c>
+      <c r="B3" t="s"><v>3–4</v></c>
+      <c r="C3"><v>44786</v></c>
+      <c r="D3"><v>44813</v></c>
+      <c r="E3"><v>44813</v></c>
+      <c r="F3"><v>44809</v></c>
+      <c r="G3" t="s"><v></v></c>
+      <c r="H3" t="s"><v></v></c>
+    </row>
+    <row r="4">
+      <c r="A4" t="n"><v>3</v></c>
+      <c r="B4" t="s"><v>5–6</v></c>
+      <c r="C4"><v>44814</v></c>
+      <c r="D4"><v>44841</v></c>
+      <c r="E4"><v>44841</v></c>
+      <c r="F4"><v>44837</v></c>
+      <c r="G4" t="s"><v></v></c>
+      <c r="H4" t="s"><v></v></c>
+    </row>
+    <row r="5">
+      <c r="A5" t="n"><v>4</v></c>
+      <c r="B5" t="s"><v>7–8</v></c>
+      <c r="C5"><v>44842</v></c>
+      <c r="D5"><v>44869</v></c>
+      <c r="E5"><v>44869</v></c>
+      <c r="F5"><v>44865</v></c>
+      <c r="G5" t="s"><v></v></c>
+      <c r="H5" t="s"><v></v></c>
+    </row>
+    <row r="6">
+      <c r="A6" t="n"><v>5</v></c>
+      <c r="B6" t="s"><v>9–10</v></c>
+      <c r="C6"><v>44870</v></c>
+      <c r="D6"><v>44897</v></c>
+      <c r="E6"><v>44897</v></c>
+      <c r="F6"><v>44893</v></c>
+      <c r="G6" t="s"><v></v></c>
+      <c r="H6" t="s"><v></v></c>
+    </row>
+    <row r="7">
+      <c r="A7" t="n"><v>6</v></c>
+      <c r="B7" t="s"><v>11</v></c>
+      <c r="C7"><v>44898</v></c>
+      <c r="D7"><v>44911</v></c>
+      <c r="E7"><v>44911</v></c>
+      <c r="F7"><v>44907</v></c>
+      <c r="G7" t="s"><v></v></c>
+      <c r="H7" t="s"><v></v></c>
+    </row>
+  </sheetData>
+  <dataValidations count="6">
+    <dataValidation type="list" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="G2:G7">
+      <formula1>"Confirmed,Pending,Not Started"</formula1>
+    </dataValidation>
+  </dataValidations>
+</worksheet>PK    !             xl/styles.xml<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <numFmts count="1">
+    <numFmt numFmtId="164" formatCode="mm/dd/yy"/>
+  </numFmts>
+  <fonts count="1">
+    <font>
+      <sz val="11"/>
+      <name val="Calibri"/>
+    </font>
+  </fonts>
+  <fills count="2">
+    <fill>
+      <patternFill patternType="none"/>
+    </fill>
+    <fill>
+      <patternFill patternType="gray125"/>
+    </fill>
+  </fills>
+  <borders count="1">
+    <border>
+      <left/>
+      <right/>
+      <top/>
+      <bottom/>
+      <diagonal/>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+  </cellXfs>
+</styleSheet>PK    !             xl/_rels/workbook.xml.rels<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>PK

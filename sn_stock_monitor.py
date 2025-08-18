@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import subprocess
 import sys
 import threading
+import requests
 from flask import Flask, request, jsonify, Response, render_template, render_template_string
 import firebase_admin
 from firebase_admin import credentials, db
@@ -304,101 +305,148 @@ def fetch_sn_price():
             return None
             
         # Get the latest available close price and round to 2 decimal places
-        return round(float(data['Close'][-1]), 2)
+        return round(float(data['Close'].iloc[-1]), 2)
     except Exception as e:
         print(f"ERROR in fetch_sn_price: {e}")
         import traceback
         print(traceback.format_exc())
         return None
         
-def fetch_historical_sn_prices(days=30):
-    """Fetch historical ServiceNow stock prices for the given number of days"""
-    try:
-        ticker = yf.Ticker(TICKER)
-        # Get daily data for the specified period
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days)
-        
-        data = ticker.history(start=start_date, end=end_date)
-        
-        if data.empty:
-            print(f"WARNING: Could not fetch historical stock data for {TICKER}")
-            return None
-        
-        # Convert to dictionary with date strings as keys and close prices as values
-        result = {}
-        for date, row in data.iterrows():
-            date_str = date.strftime('%Y-%m-%d')
-            result[date_str] = round(float(row['Close']), 2)
-            
-        return result
-    except Exception as e:
-        print(f"ERROR in fetch_historical_sn_prices: {e}")
-        import traceback
-        print(traceback.format_exc())
-        return None
+
 
 # Cache for exchange rate to ensure consistency between page refreshes
-_exchange_rate_cache = {'rate': 3.42, 'timestamp': None}
+_exchange_rate_cache = {'rate': None, 'timestamp': None}
 
 def fetch_ils_usd_rate():
     """Fetch current ILS to USD exchange rate with caching for consistency"""
     global _exchange_rate_cache
     
-    # Always return the consistent DEFAULT_ILS_USD_RATE (3.42) for both local and cloud environments
-    # This ensures consistent behavior across all environments
     current_date = datetime.now().strftime('%Y-%m-%d')
     
-    # If we need to update the cache (new day), do so
-    if _exchange_rate_cache['timestamp'] != current_date:
-        print(f"Setting exchange rate to consistent value: {DEFAULT_ILS_USD_RATE} for {current_date}")
-        _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
+    # If we need to update the cache (new day or first run), fetch from API
+    if _exchange_rate_cache['timestamp'] != current_date or _exchange_rate_cache['rate'] is None:
+        print(f"Fetching current exchange rate for {current_date}")
+        
+        # Try each API in order until we get a valid response
+        rate = None
+        for api in EXCHANGE_APIS:
+            try:
+                response = requests.get(api['url'], timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    
+                    # Navigate through the response to get the rate
+                    rate_value = data
+                    for key in api['rate_path']:
+                        rate_value = rate_value[key]
+                    
+                    rate = float(rate_value)
+                    print(f"Successfully fetched rate from {api['name']}: {rate}")
+                    break
+            except Exception as e:
+                print(f"Error fetching from {api['name']}: {e}")
+                continue
+        
+        # If we couldn't get a rate from any API, raise an exception
+        if rate is None:
+            raise Exception("Could not fetch exchange rate from any API")
+        
+        # Update the cache
+        _exchange_rate_cache = {'rate': rate, 'timestamp': current_date}
     else:
         print(f"Using cached exchange rate: {_exchange_rate_cache['rate']} from {current_date}")
-        
-    # Always return the standard fixed rate
-    return _exchange_rate_cache['rate']
     
-    # NOTE: API-based fetching is disabled to ensure consistent results across environments
-    # Re-enable by uncommenting the code below if live rates are needed in the future
+    return _exchange_rate_cache['rate']
 
 def fetch_historical_ils_usd_rates(days=30):
-    """Fetch historical ILS to USD exchange rates for the given number of days"""
+    """Fetch historical ILS to USD exchange rates for the given number of days using Frankfurter API"""
     try:
-        # For this application, we're using a fixed base rate with simulated variations
-        # This ensures consistent display across all environments (local and cloud)
-        
-        # Generate simulated historical data
         result = {}
-        today = datetime.now().strftime('%Y-%m-%d')
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
         
-        # Make sure we include today's date in the result
-        # We'll generate data for days+1 to ensure we have today's data
-        for i in range(days, -1, -1):
-            date = datetime.now() - timedelta(days=i)
-            date_str = date.strftime('%Y-%m-%d')
-            
-            # For today's date, use EXACTLY the DEFAULT_ILS_USD_RATE without variation
-            if date_str == today:
-                result[date_str] = DEFAULT_ILS_USD_RATE
-                continue
+        # Format dates for API request
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        # Use Frankfurter API time series endpoint
+        url = f"https://api.frankfurter.app/{start_date_str}..{end_date_str}?from=USD&to=ILS"
+        print(f"Fetching historical rates from {start_date_str} to {end_date_str}")
+        
+        try:
+            response = requests.get(url, timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                rates = data.get('rates', {})
                 
-            # For historical dates, add a random variation of up to ±3% from the default rate
-            # Use a fixed seed based on the date to ensure consistent values between refreshes
-            import random
-            random.seed(hash(date_str))
-            variation = random.uniform(-0.03, 0.03)
-            rate = DEFAULT_ILS_USD_RATE * (1 + variation)
-            
-            result[date_str] = round(rate, 4)
+                # Process the response data
+                for date_str, rate_data in rates.items():
+                    result[date_str] = rate_data.get('ILS')
+                
+                print(f"Successfully fetched {len(result)} historical rates")
+            else:
+                print(f"Error fetching historical rates: HTTP {response.status_code}")
+                # If API call fails, try to get individual dates
+                return fetch_individual_historical_rates(days)
+        except Exception as e:
+            print(f"Error in historical rates API call: {e}")
+            # If API call fails, try to get individual dates
+            return fetch_individual_historical_rates(days)
         
-        # Explicitly ensure today's date is in the result
+        # Make sure we have today's date in the result
+        today = end_date_str
         if today not in result:
-            result[today] = DEFAULT_ILS_USD_RATE
+            # Use current rate for today
+            result[today] = fetch_ils_usd_rate()
             
         return result
     except Exception as e:
         print(f"ERROR in fetch_historical_ils_usd_rates: {e}")
+        import traceback
+        print(traceback.format_exc())
+        return None
+        
+def fetch_individual_historical_rates(days=30):
+    """Fallback method to fetch historical rates one by one if the time series endpoint fails"""
+    try:
+        result = {}
+        today = datetime.now()
+        
+        # Get current rate for today
+        today_str = today.strftime('%Y-%m-%d')
+        result[today_str] = fetch_ils_usd_rate()
+        
+        # Fetch each historical date individually
+        for i in range(1, days + 1):
+            date = today - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            
+            try:
+                url = f"https://api.frankfurter.app/{date_str}?from=USD&to=ILS"
+                response = requests.get(url, timeout=10)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    rate = data.get('rates', {}).get('ILS')
+                    if rate:
+                        result[date_str] = float(rate)
+                        print(f"Fetched rate for {date_str}: {rate}")
+                    else:
+                        print(f"No rate available for {date_str}, skipping")
+                        continue  # Skip this date if no rate is available
+                else:
+                    print(f"Error fetching rate for {date_str}: HTTP {response.status_code}")
+                    continue  # Skip this date if there's an error
+            except Exception as e:
+                print(f"Error fetching individual rate for {date_str}: {e}")
+                continue  # Skip this date if there's an exception
+            
+            # Add a small delay to avoid rate limiting
+            time.sleep(0.2)
+        
+        return result
+    except Exception as e:
+        print(f"ERROR in fetch_individual_historical_rates: {e}")
         import traceback
         print(traceback.format_exc())
         return None
@@ -421,8 +469,8 @@ def calculate_sell_profitability(stock_prices, exchange_rates):
         for date in common_dates:
             try:
                 # Convert to float to ensure we have scalar values
-                scalar_stock_values[date] = float(stock_prices[date])
-                scalar_exchange_rates[date] = float(exchange_rates[date])
+                scalar_stock_values[date] = float(stock_prices[date].iloc[0]) if isinstance(stock_prices[date], pd.Series) else float(stock_prices[date])
+                scalar_exchange_rates[date] = float(exchange_rates[date].iloc[0]) if isinstance(exchange_rates[date], pd.Series) else float(exchange_rates[date])
             except (ValueError, TypeError):
                 # Skip dates with invalid values
                 continue
@@ -1615,27 +1663,52 @@ def fetch_historical_sn_prices(days=30):
     end_date = datetime.now() + timedelta(days=1)
     start_date = end_date - timedelta(days=days)
     
+    # Print debug info for this specific timeframe
+    print(f"ServiceNow historical data for {days} days: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
     try:
-        # Get ServiceNow stock data
+        # Get ServiceNow data using yfinance
         data = yf.download('NOW', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
         
         # Extract closing prices
-        sn_prices = {}
+        stock_prices = {}
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
-            sn_prices[date_str] = round(row['Close'], 2)
+            stock_prices[date_str] = round(row['Close'], 2)
         
-        # Force include today's price
+        # ALWAYS force include today's price regardless of timeframe
         today_str = datetime.now().strftime('%Y-%m-%d')
-        if today_str not in sn_prices:
+        print(f"ServiceNow: Adding today's date {today_str} to the dataset for {days}-day timeframe")
+        
+        # Get current price directly
+        try:
             current_price = fetch_sn_price()
             if current_price is not None:
-                sn_prices[today_str] = current_price
+                stock_prices[today_str] = current_price
+                print(f"Successfully added today's ServiceNow price: {current_price} for {days}-day timeframe")
+            else:
+                print(f"Warning: Could not fetch today's price for {days}-day timeframe")
+        except Exception as e:
+            print(f"Error fetching today's ServiceNow price for {days}-day timeframe: {e}")
+        
+        # Print the dates in the dataset to verify
+        date_list = sorted(stock_prices.keys())
+        print(f"ServiceNow {days}-day dataset date range: {date_list[0]} to {date_list[-1]} (total: {len(date_list)} days)")
             
-        return sn_prices
+        return stock_prices
     except Exception as e:
         print(f"Error fetching SN prices: {e}")
-        return {}
+        # Return a minimal dataset with today's price if possible
+        try:
+            stock_prices = {}
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            current_price = fetch_sn_price()
+            if current_price is not None:
+                stock_prices[today_str] = current_price
+                print(f"Fallback: Added today's price {current_price} after error")
+            return stock_prices
+        except:
+            return {}
 
 # Fetch historical S&P 500 prices
 def fetch_historical_sp_prices(days=30):
@@ -1653,16 +1726,22 @@ def fetch_historical_sp_prices(days=30):
             date_str = date.strftime('%Y-%m-%d')
             sp_prices[date_str] = round(row['Close'], 2)
         
-        # Force include today's price if available
+        # ALWAYS force include today's price regardless of timeframe
         today_str = datetime.now().strftime('%Y-%m-%d')
-        if today_str not in sp_prices:
-            try:
-                ticker = yf.Ticker('^GSPC')
-                current_data = ticker.history(period='1d')
-                if not current_data.empty:
+        print(f"S&P: Adding today's date {today_str} to the dataset")
+        
+        # Get current S&P price directly
+        try:
+            ticker = yf.Ticker('^GSPC')
+            current_data = ticker.history(period='1d')
+            if not current_data.empty:
+                if hasattr(current_data['Close'], 'iloc'):
                     sp_prices[today_str] = round(float(current_data['Close'].iloc[-1]), 2)
-            except Exception as e:
-                print(f"Error fetching today's S&P 500 price: {e}")
+                else:
+                    sp_prices[today_str] = round(float(current_data['Close'][-1]), 2)
+                print(f"Successfully added today's S&P price: {sp_prices[today_str]}")
+        except Exception as e:
+            print(f"Error fetching today's S&P 500 price: {e}")
             
         return sp_prices
     except Exception as e:
@@ -1836,9 +1915,32 @@ def best_to_sell():
     except ValueError:
         days = 30
     
+    # Ensure we're using the current date as the end date
+    end_date = datetime.now() + timedelta(days=1)  # Add one day to ensure today is included
+    start_date = end_date - timedelta(days=days)
+    
+    # Log the date range for debugging
+    print(f"Fetching data for timeframe: {days} days, from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
     # Fetch historical data with the specified timeframe
     stock_prices = fetch_historical_sn_prices(days)
     exchange_rates = fetch_historical_ils_usd_rates(days)
+
+    # ==> DEBUGGING: Log the state of fetched data for the given timeframe
+    print(f"[DEBUG best_to_sell] Timeframe: {days} days", flush=True)
+    if stock_prices:
+        sorted_dates = sorted(stock_prices.keys())
+        print(f"[DEBUG best_to_sell] Fetched {len(sorted_dates)} data points.", flush=True)
+        print(f"[DEBUG best_to_sell] Date range: {sorted_dates[0]} to {sorted_dates[-1]}", flush=True)
+        # Check if today's date is present
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        if today_str in sorted_dates:
+            print(f"[DEBUG best_to_sell] Today's date ({today_str}) is present in the dataset.", flush=True)
+        else:
+            print(f"[DEBUG best_to_sell] WARNING: Today's date ({today_str}) is MISSING from the dataset.", flush=True)
+    else:
+        print("[DEBUG best_to_sell] WARNING: stock_prices dictionary is empty.", flush=True)
+    # ==> END DEBUGGING
     
     profitability = calculate_sell_profitability(stock_prices, exchange_rates)
     
@@ -1863,8 +1965,8 @@ def best_to_sell():
         # Use the explicitly fetched price instead of historical data
         current_price = latest_price if latest_price is not None else stock_prices.get(current_date)
         
-        # Force current rate to be exactly DEFAULT_ILS_USD_RATE (3.42) for consistency
-        current_rate = DEFAULT_ILS_USD_RATE
+        # Use real-time exchange rate from API
+        current_rate = fetch_ils_usd_rate()
         
         # Find the best day to sell (highest profitability score)
         # Ensure we're working with scalar values, not Series
@@ -1948,16 +2050,24 @@ def best_to_sell():
         )
         # Add recommendation text to context
         context['recommendation_text'] = recommendation_text
+        context['formatted_current_profit'] = formatted_current_profit
+        context['formatted_best_profit'] = formatted_best_profit
+        context['formatted_best_date'] = formatted_best_date
+        context['formatted_current_stock'] = formatted_current_stock
+        context['formatted_current_rate'] = formatted_current_rate
+        context['score_explanation'] = get_sell_score_explanation()
+        context['timeframe'] = days
     else:
         # Use empty data template
         context = prepare_template_data([], {}, {}, {})
         context['recommendation_text'] = "Insufficient data to make a recommendation."
-    
-    # Add score explanation data for tooltips
-    context['score_explanation'] = get_sell_score_explanation()
-    
-    # Add timeframe to context
-    context['timeframe'] = days
+        context['score_explanation'] = get_score_explanation()
+        context['timeframe'] = days
+        context['formatted_current_profit'] = "N/A"
+        context['formatted_best_profit'] = "N/A"
+        context['formatted_best_date'] = "N/A"
+        context['formatted_current_stock'] = "N/A"
+        context['formatted_current_rate'] = "N/A"
     
     # Render the template with context
     return render_template('best_to_sell_new.html', **context)
@@ -1974,10 +2084,39 @@ def best_to_buy_sp():
             days = 30
     except ValueError:
         days = 30
-        
+    
+    # Ensure we're using the current date as the end date
+    end_date = datetime.now() + timedelta(days=1)  # Add one day to ensure today is included
+    start_date = end_date - timedelta(days=days)
+    
+    # Log the date range for debugging
+    print(f"Buy S&P: Fetching data for timeframe: {days} days, from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    
     # Fetch historical data with the specified timeframe
     sp_prices = fetch_historical_sp_prices(days)
     exchange_rates = fetch_historical_ils_usd_rates(days)
+    
+    # Explicitly ensure today's date is included
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    print(f"Buy S&P route: Ensuring today's date {today_str} is in the dataset for timeframe {days}")
+    
+    # Get current S&P price if not already present
+    if today_str not in sp_prices:
+        try:
+            ticker = yf.Ticker('^GSPC')
+            current_data = ticker.history(period='1d')
+            if not current_data.empty:
+                if hasattr(current_data['Close'], 'iloc'):
+                    sp_prices[today_str] = round(float(current_data['Close'].iloc[-1]), 2)
+                else:
+                    sp_prices[today_str] = round(float(current_data['Close'][-1]), 2)
+                print(f"Added today's S&P price in route handler: {sp_prices[today_str]}")
+        except Exception as e:
+            print(f"Error fetching today's S&P 500 price in route handler: {e}")
+    
+    # Ensure today's exchange rate is included
+    if today_str not in exchange_rates:
+        exchange_rates[today_str] = DEFAULT_ILS_USD_RATE
     
     # Calculate profitability for buying S&P
     profitability = calculate_buy_profitability(sp_prices, exchange_rates)
@@ -1998,8 +2137,8 @@ def best_to_buy_sp():
         current_profit = profitability.get(current_date)
         current_price = sp_prices.get(current_date)
         
-        # Force current rate to be exactly DEFAULT_ILS_USD_RATE (3.42) for consistency
-        current_rate = DEFAULT_ILS_USD_RATE
+        # Use real-time exchange rate from API
+        current_rate = fetch_ils_usd_rate()
         
         # Find the best day to buy (highest profitability score)
         # Ensure we're working with scalar values, not Series

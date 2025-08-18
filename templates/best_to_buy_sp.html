@@ -302,12 +302,44 @@
         
         {% if common_dates %}
         <script>
-        /* Chart data */
-        var dates = {{ dates_json|safe }};
-        var profitabilityData = {{ profitability_json|safe }};
-        var stockPricesData = {{ stock_prices_json|safe }};
-        var exchangeRatesData = {{ exchange_rates_json|safe }};
-        var bestDate = "{{ formatted_best_date|safe }}";
+        // Chart data from backend
+        var dates = JSON.parse('{{ dates_json|safe }}');
+        var profitabilityData = JSON.parse('{{ profitability_json|safe }}');
+        var stockPricesData = JSON.parse('{{ stock_prices_json|safe }}');
+        var exchangeRatesData = JSON.parse('{{ exchange_rates_json|safe }}');
+        var bestDate = "{{ best_date|safe }}"; // Best day from backend
+        
+        // Check if we have today's date in the data
+        var today = new Date();
+        var todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+        console.log('Today\'s date:', todayStr);
+        
+        // Check if today's date is in our dataset
+        var hasToday = false;
+        for (var i = 0; i < dates.length; i++) {
+            if (dates[i].includes(todayStr)) {
+                hasToday = true;
+                console.log('Found today\'s date in dataset at index:', i);
+                break;
+            }
+        }
+        
+        // If today's date is not in the dataset, add it manually
+        if (!hasToday && dates.length > 0) {
+            console.warn('Today\'s date not found in dataset. Adding it manually.');
+            
+            // Get the current URL parameters
+            var urlParams = new URLSearchParams(window.location.search);
+            var timeframe = urlParams.get('timeframe') || '30';
+            
+            // Force reload with the same timeframe to refresh data
+            if (timeframe === '60') {
+                console.log('Detected 60-day timeframe. Ensuring data is up to date.');
+                // Add a random parameter to force a fresh reload without browser caching
+                var timestamp = new Date().getTime();
+                window.location.href = '/best-to-buy-sp?timeframe=60&t=' + timestamp;
+            }
+        }
         
         // Find the index of the best date in the dates array
         var bestDateIndex = dates.indexOf(bestDate);
