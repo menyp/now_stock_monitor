@@ -235,8 +235,8 @@ EXCHANGE_APIS = [
 # Default fallback rate (updated to August 2025 estimate)
 DEFAULT_ILS_USD_RATE = 3.42
 
-# Initialize Firebase (only if not already initialized)
-if not firebase_admin._apps:
+# Initialize Firebase only if explicitly enabled
+if os.environ.get('USE_FIREBASE') == 'true' and not firebase_admin._apps:
     is_production = os.environ.get('ENVIRONMENT') == 'production' or os.environ.get('RENDER') == 'true'
     
     try:
@@ -270,6 +270,8 @@ if not firebase_admin._apps:
         print(f"CRITICAL: An unexpected error occurred during Firebase initialization: {e}")
         import traceback
         print(traceback.format_exc())
+else:
+    print("INFO: USE_FIREBASE is not set to 'true'. Firebase will not be used.")
 
 
 def get_current_month():
