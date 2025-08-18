@@ -1692,8 +1692,9 @@ def fetch_historical_sn_prices(days=30):
             print(f"Error fetching today's ServiceNow price for {days}-day timeframe: {e}")
         
         # Print the dates in the dataset to verify
-        date_list = sorted(stock_prices.keys())
-        print(f"ServiceNow {days}-day dataset date range: {date_list[0]} to {date_list[-1]} (total: {len(date_list)} days)")
+        if stock_prices:
+            date_list = sorted(stock_prices.keys())
+            print(f"ServiceNow {days}-day dataset date range: {date_list[0]} to {date_list[-1]} (total: {len(date_list)} days)")
             
         return stock_prices
     except Exception as e:
