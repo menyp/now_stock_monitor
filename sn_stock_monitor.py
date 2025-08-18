@@ -2309,9 +2309,10 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Email notification failed: {e}")
     
-    # Start the Flask web server in a background thread
-    server_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true'), daemon=True)
-    server_thread.start()
+    # Start the scheduler in a background thread
+    scheduler_thread = threading.Thread(target=start_scheduler, daemon=True)
+    scheduler_thread.start()
 
-    # Start the scheduler
-    start_scheduler()
+    # Start the Flask web server - bind to 0.0.0.0 for cloud deployment
+    # use_reloader=False is important to run in a non-main thread
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true', use_reloader=False)
