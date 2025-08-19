@@ -14,6 +14,17 @@ import tempfile
 import pandas as pd
 import numpy as np
 import logging
+import requests
+
+# Import Render-specific settings if the file exists
+# This will only be active in the Render environment
+try:
+    from render_settings import IS_RENDER, get_fallback_stock_data, get_fallback_exchange_rates, render_safe_request
+    RENDER_SETTINGS_AVAILABLE = True
+except ImportError:
+    # Not on Render or file not yet deployed
+    RENDER_SETTINGS_AVAILABLE = False
+    IS_RENDER = os.environ.get('RENDER') == 'true'
 
 # Custom JSON encoder for pandas Series and other non-serializable objects
 class SafeJSONEncoder(json.JSONEncoder):
@@ -351,7 +362,12 @@ def fetch_ils_usd_rate():
     
     # If we need to update the cache (new day), do so
     if _exchange_rate_cache['timestamp'] != current_date:
-        print(f"Setting exchange rate to consistent value: {DEFAULT_ILS_USD_RATE} for {current_date}")
+        if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
+            # On Render, use fallback data if needed to ensure we always have a rate
+            print(f"Setting exchange rate to consistent value for Render: {DEFAULT_ILS_USD_RATE} for {current_date}")
+        else:
+            print(f"Setting exchange rate to consistent value: {DEFAULT_ILS_USD_RATE} for {current_date}")
+            
         _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
     else:
         print(f"Using cached exchange rate: {_exchange_rate_cache['rate']} from {current_date}")
@@ -364,39 +380,100 @@ def fetch_ils_usd_rate():
 
 def fetch_historical_ils_usd_rates(days=30):
     """Fetch historical ILS to USD exchange rates for the given number of days"""
-    try:
-        # For this application, we're using a fixed base rate with simulated variations
-        # This ensures consistent display across all environments (local and cloud)
-        
-        # Generate simulated historical data
-        result = {}
-        today = datetime.now().strftime('%Y-%m-%d')
-        
-        for i in range(days, -1, -1):
-            date = datetime.now() - timedelta(days=i)
-            date_str = date.strftime('%Y-%m-%d')
+    # Check if we're on Render and should use Render-specific handling
+    if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
+        try:
+            # First attempt the normal fetch with improved reliability
+            result = _fetch_historical_ils_usd_rates_impl(days)
             
-            # For today's date, use EXACTLY the DEFAULT_ILS_USD_RATE without variation
-            if date_str == today:
-                result[date_str] = DEFAULT_ILS_USD_RATE
-                continue
+            # If we got valid data, return it
+            if result and len(result) > 5:  # Make sure we have at least some data points
+                print(f"Successfully fetched {len(result)} days of exchange rate data on Render")
+                return result
                 
-            # For historical dates, add a random variation of up to ±3% from the default rate
-            # Use a fixed seed based on the date to ensure consistent values between refreshes
-            import random
-            random.seed(hash(date_str))
-            variation = random.uniform(-0.03, 0.03)
-            rate = DEFAULT_ILS_USD_RATE * (1 + variation)
-            
-            result[date_str] = round(rate, 4)
+            # If normal fetch failed or returned insufficient data, use fallback data
+            print("Using fallback exchange rate data on Render due to fetch failure")
+            return get_fallback_exchange_rates(days)
+        except Exception as e:
+            print(f"ERROR fetching exchange rate data on Render: {e}")
+            return get_fallback_exchange_rates(days)
+    else:
+        # On non-Render environments, use the normal implementation
+        return _fetch_historical_ils_usd_rates_impl(days)
+
+# Original implementation, renamed
+def _fetch_historical_ils_usd_rates_impl(days=30):
+    """Fetch historical ILS to USD exchange rates for the given number of days"""
+    try:
+        result = {}
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        
+        # Format dates for API request
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        # Use Frankfurter API time series endpoint with improved reliability
+        url = f"https://api.frankfurter.app/{start_date_str}..{end_date_str}?from=USD&to=ILS"
+        print(f"Fetching historical rates from {start_date_str} to {end_date_str}")
+        
+        # Use longer timeout and multiple attempts for Render
+        timeout = 20 if IS_RENDER else 15
+        max_attempts = 3 if IS_RENDER else 1
+        
+        success = False
+        for attempt in range(max_attempts):
+            try:
+                # Add small delay between retries
+                if attempt > 0:
+                    time.sleep(2)
+                    print(f"Retry attempt {attempt+1} for historical exchange rates")
+                
+                # Use the render-safe request method if available
+                if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
+                    response = render_safe_request(url, timeout=timeout)
+                else:
+                    response = requests.get(url, timeout=timeout)
+                    
+                if response.status_code == 200:
+                    data = response.json()
+                    rates = data.get('rates', {})
+                    
+                    # Process the response data
+                    for date_str, rate_data in rates.items():
+                        result[date_str] = rate_data.get('ILS')
+                    
+                    print(f"Successfully fetched {len(result)} historical rates")
+                    success = True
+                    break
+                else:
+                    print(f"Attempt {attempt+1} failed: HTTP {response.status_code}")
+            except Exception as e:
+                print(f"Error in historical rates API call (attempt {attempt+1}): {e}")
+        
+        # If bulk API call fails, try to get individual dates
+        if not success or not result:
+            print("Bulk API call failed, trying individual dates...")
+            return fetch_individual_historical_rates(days)
+        
+        # Make sure we have today's date in the result
+        today = end_date_str
+        if today not in result:
+            # Use current rate for today
+            today_rate = fetch_ils_usd_rate()
+            if today_rate:
+                result[today] = today_rate
+                print(f"Added today's rate ({today}): {today_rate}")
             
         return result
     except Exception as e:
         print(f"ERROR in fetch_historical_ils_usd_rates: {e}")
-        import traceback
-        print(traceback.format_exc())
-        return None
-        
+        # Try individual dates as fallback
+        try:
+            return fetch_individual_historical_rates(days)
+        except:
+            return {}
+
 def calculate_sell_profitability(stock_prices, exchange_rates):
     """Calculate profitability for selling based on stock price and exchange rate using min/max normalization"""
     try:
@@ -1605,22 +1682,89 @@ def get_recommendation_text(current_profit, best_profit, best_date):
 
 # Fetch historical ServiceNow stock prices
 def fetch_historical_sn_prices(days=30):
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days)
-    
+    # Check if we're on Render and should use Render-specific handling
+    if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
+        try:
+            # First attempt the normal fetch with improved reliability
+            result = _fetch_historical_sn_prices_impl(days)
+            
+            # If we got valid data, return it
+            if result and len(result) > 5:  # Make sure we have at least some data points
+                print(f"Successfully fetched {len(result)} days of stock data on Render")
+                return result
+                
+            # If normal fetch failed or returned insufficient data, use fallback data
+            print("Using fallback stock data on Render due to fetch failure")
+            return get_fallback_stock_data(days)
+        except Exception as e:
+            print(f"ERROR fetching stock data on Render: {e}")
+            return get_fallback_stock_data(days)
+    else:
+        # On non-Render environments, use the normal implementation
+        return _fetch_historical_sn_prices_impl(days)
+
+# Original implementation, renamed
+def _fetch_historical_sn_prices_impl(days=30):
     try:
-        # Get ServiceNow stock data
-        data = yf.download('NOW', start=start_date.strftime('%Y-%m-%d'), end=end_date.strftime('%Y-%m-%d'))
+        end_date = datetime.now() + timedelta(days=1)
+        start_date = end_date - timedelta(days=days)
         
-        # Extract closing prices
-        sn_prices = {}
+        start_date_str = start_date.strftime('%Y-%m-%d')
+        end_date_str = end_date.strftime('%Y-%m-%d')
+        
+        print(f"Fetching ServiceNow historical data from {start_date_str} to {end_date_str}")
+        
+        # Get the historical data from yfinance
+        import yfinance as yf
+        
+        # Use longer timeout for Render environment
+        timeout = 20 if IS_RENDER else 10
+        max_attempts = 3 if IS_RENDER else 1
+        
+        # Try multiple attempts for reliability
+        last_exception = None
+        for attempt in range(max_attempts):
+            try:
+                # Add small delay between retries
+                if attempt > 0:
+                    time.sleep(2)
+                    print(f"Retry attempt {attempt+1} for ServiceNow historical data")
+                    
+                data = yf.download('NOW', start=start_date_str, end=end_date_str, 
+                                   progress=False, timeout=timeout)
+                
+                # If data is empty, try again or handle the error
+                if not data.empty:
+                    break
+                print(f"Attempt {attempt+1} returned empty data")
+            except Exception as e:
+                last_exception = e
+                print(f"Attempt {attempt+1} failed with error: {e}")
+        
+        # If all attempts failed or returned empty data
+        if data.empty:
+            print("ERROR: No historical ServiceNow data found after multiple attempts")
+            if last_exception:
+                print(f"Last error: {last_exception}")
+            return {}
+            
+        # Extract closing prices into a dictionary
+        stock_prices = {}
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
-            sn_prices[date_str] = round(row['Close'], 2)
-            
-        return sn_prices
+            stock_prices[date_str] = round(float(row['Close']), 2)
+        
+        # Add today's price directly from a current fetch if it's missing
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        if today_str not in stock_prices:
+            current_price = fetch_sn_price()
+            if current_price:
+                stock_prices[today_str] = current_price
+                print(f"Added current price for {today_str}: ${current_price}")
+        
+        return stock_prices
     except Exception as e:
-        print(f"Error fetching SN prices: {e}")
+        print(f"ERROR in fetch_historical_sn_prices: {e}")
         return {}
 
 # Fetch historical S&P 500 prices
