@@ -85,184 +85,147 @@ FALLBACK_EXCHANGE_RATES = {
     '2025-08-19': 3.42,  # Today's date - use actual data if available
 }
 
-def render_safe_request(url, timeout=20, max_retries=3):
-    """
-    Make HTTP requests more reliable on Render by adding retries and increased timeout.
-    """
-    if not IS_RENDER:
-        # If not on Render, just do a regular request
-        return requests.get(url, timeout=10)
+def render_safe_request(url, timeout=20, max_attempts=3):
+    """Make HTTP requests with retry logic for Render environment"""
+    last_exception = None
     
-    for attempt in range(max_retries):
+    for attempt in range(max_attempts):
         try:
-            # Add a small random delay between retries to avoid rate limits
             if attempt > 0:
-                time.sleep(1 + random.random())
+                # Exponential backoff
+                sleep_time = 1 * (2 ** attempt)
+                time.sleep(sleep_time)
+                print(f"Retry attempt {attempt+1}/{max_attempts} after {sleep_time}s delay")
                 
-            response = requests.get(url, timeout=timeout)
+            # Create a session with longer timeouts
+            session = requests.Session()
+            response = session.get(url, timeout=timeout)
             return response
         except Exception as e:
-            print(f"Attempt {attempt+1}/{max_retries} failed: {e}")
-            if attempt == max_retries - 1:
-                # Re-raise on the last attempt
-                raise
+            last_exception = e
+            print(f"Request attempt {attempt+1}/{max_attempts} failed: {e}")
     
-    # Should never reach here, but just in case
-    raise Exception("All request attempts failed")
+    # If we get here, all attempts failed
+    # Instead of raising exception, return a fake response object
+    # that will signal failure but not crash the application
+    class FakeResponse:
+        def __init__(self):
+            self.status_code = 500
+            self.text = str(last_exception) if last_exception else "All request attempts failed"
+            
+        def json(self):
+            return {"error": self.text}
+    
+    print("All request attempts failed, returning fake error response")
+    return FakeResponse()
 
 def get_fallback_stock_data(days=30):
     """Generate realistic fallback stock data for ServiceNow when APIs fail"""
-    today = datetime.now()
-    result = {}
-    
-    # Use ServiceNow's actual price pattern from recent history
-    # This creates a more realistic and consistent dataset
-    base_price = 892.22  # Current ServiceNow price
-    
-    # Create a set of known price points to anchor the simulation
-    # These match the pattern seen in your local environment
-    key_dates = {
-        (today - timedelta(days=20)).strftime('%Y-%m-%d'): 865.30,  # Lower price point
-        (today - timedelta(days=15)).strftime('%Y-%m-%d'): 840.00,  # Local minimum
-        (today - timedelta(days=10)).strftime('%Y-%m-%d'): 875.60,  # Recovery
-        (today - timedelta(days=5)).strftime('%Y-%m-%d'): 885.90,   # Uptrend
-        today.strftime('%Y-%m-%d'): base_price                      # Current price
-    }
-    
-    # Fill in all dates with interpolated or extrapolated values
-    date_list = []
-    for i in range(days, -1, -1):
-        date = today - timedelta(days=i)
-        date_str = date.strftime('%Y-%m-%d')
-        date_list.append(date_str)
+    try:
+        today = datetime.now()
+        result = {}
         
-        if date_str in key_dates:
-            # Use the predefined price for key dates
-            result[date_str] = key_dates[date_str]
-        else:
-            # For other dates, use a deterministic but realistic variation
-            # based on the date to ensure consistency
+        # Use a simple approach with a base price and minor variations to avoid errors
+        base_price = 892.22  # Current ServiceNow price
+        
+        # Create some price variation over time
+        for i in range(days, -1, -1):
+            date = today - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            
+            # Use a deterministic random seed based on the date string
+            # This ensures consistent results between app restarts
             random.seed(hash(date_str))
             
-            # Find the nearest key dates before and after
-            before_dates = [d for d in key_dates if d < date_str]
-            after_dates = [d for d in key_dates if d > date_str]
+            # Create a price with slight variation
+            # More recent dates will have slightly higher prices (small uptrend)
+            trend_factor = 1.0 + (days - i) * 0.001  # 0.1% uptrend per day
+            variation = random.uniform(-0.015, 0.015)  # ±1.5% daily movement
+            price = base_price * trend_factor * (1 + variation)
             
-            if before_dates and after_dates:
-                # Interpolate between key dates
-                before_date = max(before_dates)
-                after_date = min(after_dates)
-                before_price = key_dates[before_date]
-                after_price = key_dates[after_date]
-                
-                # Calculate days between dates for interpolation weight
-                before_dt = datetime.strptime(before_date, '%Y-%m-%d')
-                after_dt = datetime.strptime(after_date, '%Y-%m-%d')
-                curr_dt = datetime.strptime(date_str, '%Y-%m-%d')
-                
-                total_days = (after_dt - before_dt).days
-                days_from_before = (curr_dt - before_dt).days
-                
-                if total_days > 0:
-                    # Linear interpolation with a small random variation
-                    weight = days_from_before / total_days
-                    base_value = before_price + (after_price - before_price) * weight
-                    variation = random.uniform(-0.005, 0.005)  # ±0.5% variation
-                    result[date_str] = round(base_value * (1 + variation), 2)
-                else:
-                    result[date_str] = round(before_price, 2)
-            elif before_dates:
-                # Extrapolate after the last key date with a small trend
-                last_date = max(before_dates)
-                last_price = key_dates[last_date]
-                days_since = (curr_dt - datetime.strptime(last_date, '%Y-%m-%d')).days
-                trend = random.uniform(0.001, 0.003)  # 0.1% to 0.3% daily trend
-                variation = random.uniform(-0.005, 0.005)  # ±0.5% daily variation
-                result[date_str] = round(last_price * (1 + trend * days_since + variation), 2)
-            elif after_dates:
-                # Extrapolate before the first key date with a small trend
-                first_date = min(after_dates)
-                first_price = key_dates[first_date]
-                days_before = (datetime.strptime(first_date, '%Y-%m-%d') - curr_dt).days
-                trend = random.uniform(-0.002, -0.001)  # -0.1% to -0.2% daily trend
-                variation = random.uniform(-0.005, 0.005)  # ±0.5% daily variation
-                result[date_str] = round(first_price * (1 + trend * days_before + variation), 2)
-    
-    return result
+            # Round to 2 decimal places like real stock prices
+            result[date_str] = round(price, 2)
+        
+        # Make specific dates have predetermined values to create a pattern
+        # similar to what's seen in the local environment
+        key_dates = {
+            (today - timedelta(days=20)).strftime('%Y-%m-%d'): 865.30,
+            (today - timedelta(days=15)).strftime('%Y-%m-%d'): 840.00,
+            (today - timedelta(days=10)).strftime('%Y-%m-%d'): 875.60,
+            (today - timedelta(days=5)).strftime('%Y-%m-%d'): 885.90,
+            today.strftime('%Y-%m-%d'): base_price
+        }
+        
+        # Override with key date values
+        for date, price in key_dates.items():
+            if date in result:
+                result[date] = price
+        
+        print(f"Generated {len(result)} days of fallback stock data")
+        return result
+    except Exception as e:
+        print(f"Error in get_fallback_stock_data: {e}")
+        # Ultimate fallback - just return 30 days of the same price
+        result = {}
+        today = datetime.now()
+        for i in range(days, -1, -1):
+            date = today - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            result[date_str] = 892.22
+        return result
 
 def get_fallback_exchange_rates(days=30):
     """Generate realistic fallback exchange rate data for USD/ILS when APIs fail"""
-    today = datetime.now()
-    result = {}
-    
-    # Use actual USD/ILS exchange rate pattern from recent history
-    # This creates a more realistic and consistent dataset
-    current_rate = 3.39  # Current exchange rate seen in local environment
-    
-    # Create a set of known exchange rate points to anchor the simulation
-    # These match the pattern seen in your local environment
-    key_dates = {
-        (today - timedelta(days=25)).strftime('%Y-%m-%d'): 3.44,   # Higher rate point
-        (today - timedelta(days=18)).strftime('%Y-%m-%d'): 3.46,   # Peak
-        (today - timedelta(days=12)).strftime('%Y-%m-%d'): 3.42,   # Decline
-        (today - timedelta(days=6)).strftime('%Y-%m-%d'): 3.38,    # Further decline
-        today.strftime('%Y-%m-%d'): current_rate                   # Current rate
-    }
-    
-    # Fill in all dates with interpolated or extrapolated values
-    for i in range(days, -1, -1):
-        date = today - timedelta(days=i)
-        date_str = date.strftime('%Y-%m-%d')
+    try:
+        today = datetime.now()
+        result = {}
         
-        if date_str in key_dates:
-            # Use the predefined rate for key dates
-            result[date_str] = key_dates[date_str]
-        else:
-            # For other dates, use deterministic but realistic variation
+        # Use a simplified approach with a base rate and minor variations
+        current_rate = 3.39  # Current exchange rate seen in local environment
+        
+        # Create some rate variation over time
+        for i in range(days, -1, -1):
+            date = today - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            
+            # Use a deterministic random seed based on the date string
+            # This ensures consistent results between app restarts
             random.seed(hash(date_str))
             
-            # Find the nearest key dates before and after
-            before_dates = [d for d in key_dates if d < date_str]
-            after_dates = [d for d in key_dates if d > date_str]
+            # Create slight variations in exchange rate
+            # More recent dates will have slightly lower rates (small downtrend)
+            days_factor = (days - i) * 0.0002  # Small daily change
+            variation = random.uniform(-0.005, 0.005)  # ±0.5% daily movement
+            rate = current_rate + variation - days_factor
             
-            if before_dates and after_dates:
-                # Interpolate between key dates
-                before_date = max(before_dates)
-                after_date = min(after_dates)
-                before_rate = key_dates[before_date]
-                after_rate = key_dates[after_date]
-                
-                # Calculate days between dates for interpolation weight
-                before_dt = datetime.strptime(before_date, '%Y-%m-%d')
-                after_dt = datetime.strptime(after_date, '%Y-%m-%d')
-                curr_dt = datetime.strptime(date_str, '%Y-%m-%d')
-                
-                total_days = (after_dt - before_dt).days
-                days_from_before = (curr_dt - before_dt).days
-                
-                if total_days > 0:
-                    # Linear interpolation with a small random variation
-                    weight = days_from_before / total_days
-                    base_value = before_rate + (after_rate - before_rate) * weight
-                    variation = random.uniform(-0.002, 0.002)  # ±0.2% variation
-                    result[date_str] = round(base_value + variation, 2)
-                else:
-                    result[date_str] = round(before_rate, 2)
-            elif before_dates:
-                # Extrapolate after the last key date
-                last_date = max(before_dates)
-                last_rate = key_dates[last_date]
-                days_since = (curr_dt - datetime.strptime(last_date, '%Y-%m-%d')).days
-                trend = random.uniform(-0.001, -0.0005)  # Small daily trend
-                variation = random.uniform(-0.002, 0.002)  # ±0.2% daily variation
-                result[date_str] = round(last_rate + trend * days_since + variation, 2)
-            elif after_dates:
-                # Extrapolate before the first key date
-                first_date = min(after_dates)
-                first_rate = key_dates[first_date]
-                days_before = (datetime.strptime(first_date, '%Y-%m-%d') - curr_dt).days
-                trend = random.uniform(0.0005, 0.001)  # Small daily trend
-                variation = random.uniform(-0.002, 0.002)  # ±0.2% daily variation
-                result[date_str] = round(first_rate + trend * days_before + variation, 2)
-    
-    return result
+            # Round to 2 decimal places
+            result[date_str] = round(rate, 2)
+        
+        # Make specific dates have predetermined values to create a pattern
+        # similar to what's seen in the local environment
+        key_dates = {
+            (today - timedelta(days=25)).strftime('%Y-%m-%d'): 3.44,   # Higher rate
+            (today - timedelta(days=18)).strftime('%Y-%m-%d'): 3.46,   # Peak
+            (today - timedelta(days=12)).strftime('%Y-%m-%d'): 3.42,   # Decline
+            (today - timedelta(days=6)).strftime('%Y-%m-%d'): 3.38,    # Further decline
+            today.strftime('%Y-%m-%d'): current_rate                   # Current rate
+        }
+        
+        # Override with key date values
+        for date, rate in key_dates.items():
+            if date in result:
+                result[date] = rate
+        
+        print(f"Generated {len(result)} days of fallback exchange rate data")
+        return result
+        
+    except Exception as e:
+        print(f"Error in get_fallback_exchange_rates: {e}")
+        # Ultimate fallback - just return 30 days of the same rate
+        result = {}
+        today = datetime.now()
+        for i in range(days, -1, -1):
+            date = today - timedelta(days=i)
+            date_str = date.strftime('%Y-%m-%d')
+            result[date_str] = 3.39
+        return result
