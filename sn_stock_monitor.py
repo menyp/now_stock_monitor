@@ -806,7 +806,7 @@ def start_scheduler():
         time.sleep(10)
 
 # --- Flask Web Interface ---
-app = Flask(__name__, template_folder='templates')
+app = Flask(__name__, template_folder='templates', static_folder='static', static_url_path='/static')
 
 @app.route('/')
 def dashboard():
