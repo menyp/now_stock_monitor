@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import subprocess
 import sys
 import threading
-from flask import Flask, request, jsonify, Response, render_template, render_template_string
+from flask import Flask, request, jsonify, Response, render_template, render_template_string, redirect, url_for
 import firebase_admin
 from firebase_admin import credentials, db
 import tempfile
@@ -163,9 +163,11 @@ def prepare_template_data(common_dates, profitability, prices, rates, current_pr
     except (TypeError, ValueError):
         current_price_scalar = None
         
-    # Always use DEFAULT_ILS_USD_RATE for display, regardless of input
-    # This ensures consistency between local and cloud environments
-    current_rate_scalar = DEFAULT_ILS_USD_RATE
+    # Use the provided current_rate, which is the latest from the historical data
+    try:
+        current_rate_scalar = float(current_rate.item()) if hasattr(current_rate, 'item') else float(current_rate) if current_rate is not None else None
+    except (TypeError, ValueError):
+        current_rate_scalar = None
     
     # Format for display
     formatted_current_profit = f"{current_profit_scalar:.1f}" if current_profit_scalar is not None else "N/A"
@@ -355,28 +357,52 @@ _exchange_rate_cache = {'rate': 3.42, 'timestamp': None}
 def fetch_ils_usd_rate():
     """Fetch current ILS to USD exchange rate with caching for consistency"""
     global _exchange_rate_cache
-    
-    # Always return the consistent DEFAULT_ILS_USD_RATE (3.42) for both local and cloud environments
-    # This ensures consistent behavior across all environments
     current_date = datetime.now().strftime('%Y-%m-%d')
     
-    # If we need to update the cache (new day), do so
-    if _exchange_rate_cache['timestamp'] != current_date:
-        if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
-            # On Render, use fallback data if needed to ensure we always have a rate
-            print(f"Setting exchange rate to consistent value for Render: {DEFAULT_ILS_USD_RATE} for {current_date}")
-        else:
-            print(f"Setting exchange rate to consistent value: {DEFAULT_ILS_USD_RATE} for {current_date}")
-            
-        _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
-    else:
+    # If we already have a rate for today, use the cached value
+    if _exchange_rate_cache['timestamp'] == current_date:
         print(f"Using cached exchange rate: {_exchange_rate_cache['rate']} from {current_date}")
-        
-    # Always return the standard fixed rate
-    return _exchange_rate_cache['rate']
+        return _exchange_rate_cache['rate']
     
-    # NOTE: API-based fetching is disabled to ensure consistent results across environments
-    # Re-enable by uncommenting the code below if live rates are needed in the future
+    # Otherwise, try to fetch a new rate from APIs
+    print(f"Fetching new exchange rate for {current_date}...")
+    
+    # Try each API in order until we get a valid result
+    for api in EXCHANGE_APIS:
+        try:
+            print(f"Trying {api['name']}...")
+            # Use render_safe_request if available, otherwise use standard requests
+            if RENDER_SETTINGS_AVAILABLE and IS_RENDER:
+                response = render_safe_request(api['url'], timeout=10)
+            else:
+                response = requests.get(api['url'], timeout=10)
+                
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Navigate the JSON path to get the rate
+                rate_value = data
+                for key in api['rate_path']:
+                    rate_value = rate_value[key]
+                    
+                # Convert to float and validate
+                rate = float(rate_value)
+                if 3.0 <= rate <= 4.5:  # Sanity check for USD/ILS range
+                    print(f"Successfully fetched rate from {api['name']}: {rate}")
+                    # Update cache with new rate
+                    _exchange_rate_cache = {'rate': rate, 'timestamp': current_date}
+                    return rate
+                else:
+                    print(f"Invalid rate from {api['name']}: {rate} (outside reasonable range)")
+            else:
+                print(f"API request to {api['name']} failed with status code {response.status_code}")
+        except Exception as e:
+            print(f"Error with {api['name']}: {str(e)}")
+    
+    # If all APIs failed, use the default rate as fallback
+    print(f"All APIs failed, using default rate {DEFAULT_ILS_USD_RATE}")
+    _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
+    return DEFAULT_ILS_USD_RATE
 
 def fetch_historical_ils_usd_rates(days=30):
     """Fetch historical ILS to USD exchange rates for the given number of days"""
