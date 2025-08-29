@@ -2008,7 +2008,7 @@ def best_to_sell():
         current_price = latest_price if latest_price is not None else stock_prices.get(current_date)
         
         # Force current rate to be exactly DEFAULT_ILS_USD_RATE (3.42) for consistency
-        current_rate = DEFAULT_ILS_USD_RATE
+        current_rate = fetch_ils_usd_rate()
         
         # Find the best day to sell (highest profitability score)
         # Ensure we're working with scalar values, not Series
@@ -2143,7 +2143,7 @@ def best_to_buy_sp():
         current_price = sp_prices.get(current_date)
         
         # Force current rate to be exactly DEFAULT_ILS_USD_RATE (3.42) for consistency
-        current_rate = DEFAULT_ILS_USD_RATE
+        current_rate = fetch_ils_usd_rate()
         
         # Find the best day to buy (highest profitability score)
         # Ensure we're working with scalar values, not Series
@@ -2309,4 +2309,5 @@ if __name__ == "__main__":
     scheduler_thread.start()
     
     # Start the Flask web server - bind to 0.0.0.0 for cloud deployment
+    port = 5002 if os.environ.get('PORT') is None else port
     app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true')
