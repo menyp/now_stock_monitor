@@ -1796,6 +1796,8 @@ def _fetch_historical_sn_prices_impl(days=30):
         
         # Try multiple attempts for reliability
         last_exception = None
+        data = None
+        
         for attempt in range(max_attempts):
             try:
                 # Add small delay between retries
@@ -1807,7 +1809,7 @@ def _fetch_historical_sn_prices_impl(days=30):
                                    progress=False, timeout=timeout)
                 
                 # If data is empty, try again or handle the error
-                if not data.empty:
+                if data is not None and not data.empty:
                     break
                 print(f"Attempt {attempt+1} returned empty data")
             except Exception as e:
@@ -1815,7 +1817,7 @@ def _fetch_historical_sn_prices_impl(days=30):
                 print(f"Attempt {attempt+1} failed with error: {e}")
         
         # If all attempts failed or returned empty data
-        if data.empty:
+        if data is None or data.empty:
             print("ERROR: No historical ServiceNow data found after multiple attempts")
             if last_exception:
                 print(f"Last error: {last_exception}")
@@ -1825,9 +1827,18 @@ def _fetch_historical_sn_prices_impl(days=30):
         stock_prices = {}
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
-            # Use iloc to avoid Series deprecation warning
-            close_price = row['Close']
-            stock_prices[date_str] = round(float(close_price) if not pd.isna(close_price) else 0.0, 2)
+            # Handle MultiIndex DataFrame - row['Close'] might be a Series
+            close_value = row['Close']
+            # If it's a Series (MultiIndex), get the first value
+            if isinstance(close_value, pd.Series):
+                close_price = close_value.iloc[0] if len(close_value) > 0 else None
+            else:
+                close_price = close_value
+            
+            if close_price is not None and not pd.isna(close_price):
+                stock_prices[date_str] = round(float(close_price), 2)
+            else:
+                print(f"Warning: No close price for {date_str}")
         
         # Add today's price directly from a current fetch if it's missing
         today_str = datetime.now().strftime('%Y-%m-%d')
