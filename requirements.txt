@@ -1,5 +1,5 @@
 pandas
-yfinance==0.2.37
+yfinance==0.2.65
 firebase-admin
 openpyxl==3.1.2
 matplotlib
@@ -9,4 +9,3 @@ schedule
 pync
 requests
 gunicorn
-firebase-admin

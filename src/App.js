@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import './App.css';
 import AnalysisResult from './components/AnalysisResult';
 import YearlyLineCharts from './components/YearlyLineCharts';
+import WindowAllYearsLineCharts from './components/WindowAllYearsLineCharts';
 
 function App() {
   const [years, setYears] = useState(10);
