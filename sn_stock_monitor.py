@@ -317,7 +317,7 @@ def fetch_sn_price():
             return None
             
         # Get the latest available close price and round to 2 decimal places
-        return round(float(data['Close'][-1]), 2)
+        return round(float(data['Close'].iloc[-1]), 2)
     except Exception as e:
         print(f"ERROR in fetch_sn_price: {e}")
         import traceback
@@ -399,10 +399,10 @@ def fetch_ils_usd_rate():
         except Exception as e:
             print(f"Error with {api['name']}: {str(e)}")
     
-    # If all APIs failed, use the default rate as fallback
-    print(f"All APIs failed, using default rate {DEFAULT_ILS_USD_RATE}")
-    _exchange_rate_cache = {'rate': DEFAULT_ILS_USD_RATE, 'timestamp': current_date}
-    return DEFAULT_ILS_USD_RATE
+    # If all APIs failed, raise an exception instead of using fallback
+    error_msg = "All exchange rate APIs failed. Cannot fetch current USD/ILS rate."
+    print(f"ERROR: {error_msg}")
+    raise Exception(error_msg)
 
 def fetch_historical_ils_usd_rates(days=30):
     """Fetch historical ILS to USD exchange rates for the given number of days"""
@@ -639,12 +639,17 @@ def send_email_alert(subject, body, to_email):
     import smtplib
     from email.mime.text import MIMEText
 
-    # ---- CONFIGURE THESE ----
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    sender_email = "menypeled@gmail.com"         # <-- Replace with your Gmail address
-    sender_password = "upmjrmpzuthbbfpd"         # <-- Replace with your Gmail App Password
-    # -------------------------
+    # Get email credentials from environment variables for security
+    smtp_server = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
+    smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+    sender_email = os.environ.get('SENDER_EMAIL', 'menypeled@gmail.com')
+    sender_password = os.environ.get('SENDER_PASSWORD', '')
+    
+    # Check if credentials are configured
+    if not sender_password:
+        print("WARNING: SENDER_PASSWORD environment variable not set. Email alerts disabled.")
+        logging.warning("Email alert skipped: SENDER_PASSWORD not configured")
+        return
 
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -856,6 +861,48 @@ def start_scheduler():
 
 # --- Flask Web Interface ---
 app = Flask(__name__, template_folder='templates')
+
+# Health check endpoint for monitoring and deployment verification
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring services"""
+    try:
+        # Check if we can fetch stock data
+        current_price = fetch_sn_price()
+        stock_api_status = "healthy" if current_price else "degraded"
+        
+        # Check if we can fetch exchange rate
+        try:
+            current_rate = fetch_ils_usd_rate()
+            exchange_api_status = "healthy" if current_rate else "degraded"
+        except:
+            exchange_api_status = "degraded"
+        
+        # Check Firebase connection
+        firebase_status = "healthy" if firebase_admin._apps else "not_initialized"
+        
+        health_data = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "services": {
+                "stock_api": stock_api_status,
+                "exchange_api": exchange_api_status,
+                "firebase": firebase_status,
+                "flask": "healthy"
+            },
+            "version": "2.0.0"
+        }
+        
+        # Return 200 if all critical services are healthy, 503 if degraded
+        status_code = 200 if stock_api_status == "healthy" else 503
+        return jsonify(health_data), status_code
+        
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 503
 
 @app.route('/')
 def dashboard():
@@ -1778,7 +1825,9 @@ def _fetch_historical_sn_prices_impl(days=30):
         stock_prices = {}
         for date, row in data.iterrows():
             date_str = date.strftime('%Y-%m-%d')
-            stock_prices[date_str] = round(float(row['Close']), 2)
+            # Use iloc to avoid Series deprecation warning
+            close_price = row['Close']
+            stock_prices[date_str] = round(float(close_price) if not pd.isna(close_price) else 0.0, 2)
         
         # Add today's price directly from a current fetch if it's missing
         today_str = datetime.now().strftime('%Y-%m-%d')
@@ -2291,7 +2340,15 @@ if __name__ == "__main__":
     print("-----------------------------")
     
     # Get port from command line args or environment variable for cloud deployment
-    port = args.port if args.port else int(os.environ.get('PORT', 5001))
+    # Priority: 1) Command line arg, 2) PORT env var, 3) Default 5001
+    if args.port:
+        port = args.port
+    elif os.environ.get('PORT'):
+        port = int(os.environ.get('PORT'))
+    else:
+        port = 5001  # Default port for local development
+    
+    print(f"Starting Flask app on port {port}")
     
     # Only send email if not in production (to avoid spamming)
     if os.environ.get('ENVIRONMENT') != 'production':
@@ -2309,5 +2366,4 @@ if __name__ == "__main__":
     scheduler_thread.start()
     
     # Start the Flask web server - bind to 0.0.0.0 for cloud deployment
-    port = 5002 if os.environ.get('PORT') is None else port
     app.run(host='0.0.0.0', port=port, debug=os.environ.get('DEBUG', 'True').lower() == 'true')
